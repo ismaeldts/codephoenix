@@ -46,6 +46,27 @@ class SecurityAnalyzerTest {
 	}
 
 	@Test
+	void describesFindingsWhenSpotBugsOmitsTheMessage() {
+		String xml = """
+				<BugCollection>
+				  <BugInstance type="DM_CONVERT_CASE" priority="3" category="I18N">
+				    <Method classname="demo.Entrada" name="columnas"/>
+				    <SourceLine classname="demo.Entrada" start="50" sourcepath="demo/Entrada.java"/>
+				  </BugInstance>
+				  <BugInstance type="SOME_NEW_PATTERN" priority="3" category="STYLE">
+				    <SourceLine classname="demo.Entrada" start="7" sourcepath="demo/Entrada.java"/>
+				  </BugInstance>
+				</BugCollection>
+				""";
+
+		SecurityReport report = analyzer.fromSpotBugs(xml, Map.of(), "demo", "");
+
+		assertEquals("Conversión a mayúsculas/minúsculas sin Locale explícito (método columnas)",
+				report.findings().get(0).message());
+		assertTrue(report.findings().get(1).message().startsWith("Patrón SOME_NEW_PATTERN detectado por"));
+	}
+
+	@Test
 	void cleanReportHasNoFindings() {
 		SecurityReport report = analyzer.fromSpotBugs("<BugCollection/>", Map.of(), "x", "");
 

@@ -47,6 +47,7 @@ import com.challenge.codephoenix.infrastructure.analysis.JavaQualityAnalyzer;
 import com.challenge.codephoenix.infrastructure.analysis.LanguageDetector;
 import com.challenge.codephoenix.infrastructure.analysis.SecretMasker;
 import com.challenge.codephoenix.infrastructure.analysis.SecurityAnalyzer;
+import com.challenge.codephoenix.infrastructure.analysis.StepDefinitionLinter;
 import com.challenge.codephoenix.infrastructure.packaging.MigrationPackager;
 import com.challenge.codephoenix.infrastructure.packaging.TraceabilityMatrix;
 import com.challenge.codephoenix.infrastructure.sandbox.DockerSandbox;
@@ -83,14 +84,17 @@ public class MigrationOrchestrator {
 	private final MigrationPackager packager;
 	private final TraceabilityMatrix traceability;
 	private final SecurityAnalyzer securityAnalyzer;
+	private final StepDefinitionLinter stepLinter;
 	private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
 	public MigrationOrchestrator(JobRepository repository, CodephoenixProperties properties, SecretMasker masker,
 			LanguageDetector languageDetector, List<LegacyPlatform> platforms, JavaQualityAnalyzer qualityAnalyzer,
 			DockerSandbox sandbox, ExecutionService execution, AnalystAgent analyst, RuleExtractorAgent ruleExtractor,
 			ArchitectAgent architect, QaAgent qa, DeveloperAgent developer, DocumentationAgent documenter,
-			MigrationPackager packager, TraceabilityMatrix traceability, SecurityAnalyzer securityAnalyzer) {
+			MigrationPackager packager, TraceabilityMatrix traceability, SecurityAnalyzer securityAnalyzer,
+			StepDefinitionLinter stepLinter) {
 		this.securityAnalyzer = securityAnalyzer;
+		this.stepLinter = stepLinter;
 		this.repository = repository;
 		this.properties = properties;
 		this.masker = masker;
@@ -352,7 +356,7 @@ public class MigrationOrchestrator {
 		job.testCasesDesigned(cases);
 		job.log(Phase.GENERACION, "OK", "Golden Master capturado del programa original para " + golden.size() + " casos");
 		phase.progress("El Agente Desarrollador genera el código (intento 1)");
-		Map<String, String> files = onlySources(developer.generate(job, goldenSamples(cases, golden, 6),
+		Map<String, String> files = onlySources(developer.generate(job, goldenSamples(job, cases, golden, 6),
 				platform.ioContract(job)));
 		if (files.isEmpty()) {
 			throw new GateFailedException(Phase.GENERACION, "El Agente Desarrollador no devolvió archivos de código.");
@@ -437,7 +441,7 @@ public class MigrationOrchestrator {
 		}
 
 		phase.progress("El Agente QA genera las pruebas unitarias y los escenarios BDD ejecutables");
-		String samples = goldenSamples(cases, golden, 10);
+		String samples = goldenSamples(job, cases, golden, 10);
 		String glue = job.getArchitecture().basePackage() + ".bdd";
 		var bddFuture = executor.submit(() -> developer.generateBdd(job, mainFiles(job), samples, glue));
 		generateTestsInBatches(job, samples);
@@ -447,6 +451,13 @@ public class MigrationOrchestrator {
 		BddReport bdd = null;
 		for (int attempt = 0; attempt <= MAX_TEST_FIX_ATTEMPTS; attempt++) {
 			phase.progress("Ejecutando JUnit 5 + JaCoCo y Cucumber en el sandbox" + (attempt > 0 ? " (corrección " + attempt + ")" : ""));
+			StepDefinitionLinter.Result lint = stepLinter.removeDuplicateSteps(job.getGeneratedFiles(),
+					"src/test/java/" + glue.replace('.', '/') + "/");
+			if (!lint.files().isEmpty()) {
+				applyFiles(job, lint.files());
+				job.log(Phase.VERIFICACION, "WARN", "Pasos de Cucumber duplicados corregidos automáticamente (Cucumber "
+						+ "ignora la palabra clave Dado/Cuando/Entonces/Y): " + String.join(", ", lint.removed()));
+			}
 			tests = execution.runUnitTests(dir);
 			bdd = tests.compiled() ? bddReport(job, execution.runBdd(dir, glue)) : null;
 			String testProblem = testProblem(tests);
@@ -554,7 +565,8 @@ public class MigrationOrchestrator {
 
 	// --------------------------------------------------------- utilidades
 
-	private static String goldenSamples(List<TestCase> cases, Map<String, List<String>> golden, int max) {
+	private String goldenSamples(MigrationJob job, List<TestCase> cases, Map<String, List<String>> golden, int max) {
+		LegacyPlatform platform = platform(job);
 		List<TestCase> selected = new ArrayList<>();
 		for (String kind : List.of("NOMINAL", "BORDE", "ERROR", "USUARIO")) {
 			cases.stream().filter(c -> kind.equals(c.kind())).limit(Math.max(1, max / 3)).forEach(selected::add);
@@ -564,8 +576,10 @@ public class MigrationOrchestrator {
 			List<String> shown = out.size() <= 8 ? out
 					: Stream.of(out.subList(0, 5), List.of("... (" + (out.size() - 7) + " líneas omitidas) ..."),
 							out.subList(out.size() - 2, out.size())).flatMap(List::stream).toList();
-			return "Caso " + c.id() + " (" + c.kind() + "): " + c.description() + "\nENTRADA: «" + c.input()
-					+ "»\nSALIDA LEGACY:\n" + String.join("\n", shown);
+			String decoded = platform.describeInput(job, c.input());
+			return "Caso " + c.id() + " (" + c.kind() + "): " + c.description() + "\nENTRADA: «" + c.input() + "»"
+					+ (decoded.isEmpty() ? "" : "\nVALORES DE LA ENTRADA (decodificados, úsalos tal cual): " + decoded)
+					+ "\nSALIDA LEGACY:\n" + String.join("\n", shown);
 		}).collect(Collectors.joining("\n\n"));
 	}
 

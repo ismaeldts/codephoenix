@@ -45,6 +45,14 @@ public interface LegacyPlatform {
 	/** Convierte los casos del Agente QA y los aportados por el usuario en casos ejecutables. */
 	List<TestCase> toTestCases(MigrationJob job, List<QaAgent.CaseDraft> drafts);
 
+	/**
+	 * Valores legibles de una entrada codificada (por ejemplo, los campos de un registro de ancho
+	 * fijo), para que los agentes no tengan que decodificarla a mano. Vacío si la entrada ya es legible.
+	 */
+	default String describeInput(MigrationJob job, String input) {
+		return "";
+	}
+
 	/** Ejecuta el programa original con cada caso y devuelve su salida (Golden Master). */
 	ExecutionService.RunOutcome runLegacy(MigrationJob job, Path jobDir, List<TestCase> cases)
 			throws IOException, InterruptedException;

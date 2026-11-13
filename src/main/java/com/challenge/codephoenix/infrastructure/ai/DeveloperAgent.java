@@ -157,6 +157,12 @@ public class DeveloperAgent {
 				   es el separador decimal y el punto el de miles. Escribe los importes con coma decimal y sin
 				   separador de miles (10661,10) o captúralos como {string} y conviértelos con new BigDecimal(...).
 				   Compara importes con compareTo, no con equals (la escala puede diferir).
+				   IMPORTANTE: Cucumber IGNORA la palabra clave al enlazar un paso con su definición. Define cada
+				   texto de paso UNA sola vez, con una sola anotación (@Dado, @Cuando o @Entonces); un paso que en
+				   el .feature empieza por "Y" usa esa misma definición. Nunca repitas el mismo texto con @Y ni en
+				   dos métodos: Cucumber lanza DuplicateStepDefinitionException y fallan todos los escenarios.
+				3. Los datos de cada escenario deben ser coherentes con su resultado: si tomas el resultado de un caso
+				   del Golden Master, usa exactamente los VALORES DE LA ENTRADA decodificados de ese mismo caso.
 				   Ejercita el servicio de aplicación o el dominio, no copies la lógica en los pasos. Sin Mockito.
 				No modifiques el código de producción. Devuelve solo bloques de archivo.
 				""".formatted(PromptSupport.rulesSpec(job.getAcceptedRules()), PromptSupport.filesAsBlocks(mainFiles),

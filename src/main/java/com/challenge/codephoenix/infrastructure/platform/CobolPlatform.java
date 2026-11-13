@@ -129,6 +129,32 @@ public class CobolPlatform implements LegacyPlatform {
 	}
 
 	@Override
+	public String describeInput(MigrationJob job, String input) {
+		return describeRecord(job.getAnalysis().inputRecord(), input);
+	}
+
+	/** Decodifica un registro de ancho fijo según su diseño: "IN-MONTO=25000.50 · IN-PLAZO=10 ...". */
+	static String describeRecord(List<StaticAnalysis.RecordField> layout, String input) {
+		if (layout.isEmpty() || input == null) {
+			return "";
+		}
+		List<String> parts = new ArrayList<>();
+		for (StaticAnalysis.RecordField field : layout) {
+			int start = field.start() - 1;
+			String raw = start >= input.length() ? "" : input.substring(start, Math.min(input.length(), start + field.length()));
+			if (raw.length() < field.length() || !raw.chars().allMatch(Character::isDigit)) {
+				parts.add(field.name() + "=«" + raw + "» (no numérico o incompleto)");
+				continue;
+			}
+			String digits = raw.replaceFirst("^0+(?=\\d)", "");
+			String value = field.decimals() == 0 ? digits
+					: new java.math.BigDecimal(new java.math.BigInteger(raw), field.decimals()).toPlainString();
+			parts.add(field.name() + "=" + value);
+		}
+		return String.join(" · ", parts);
+	}
+
+	@Override
 	public ExecutionService.RunOutcome runLegacy(MigrationJob job, Path jobDir, List<TestCase> cases)
 			throws IOException, InterruptedException {
 		return execution.runLegacy(jobDir, job.getSourceName(), cases);
