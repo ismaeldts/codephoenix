@@ -65,7 +65,7 @@ reutiliza (`docker rm -f codephoenix-oracle` lo elimina).
 | 3. Reglas de negocio | Agente Extractor: reglas condición/acción, tablas de decisión, Gherkin, líneas de origen y nivel de confianza | Todas las reglas trazadas a líneas válidas |
 | 4. Validación humana | El ingeniero aprueba, ajusta o rechaza cada regla; la especificación se versiona | Aprobación explícita |
 | 5. Arquitectura | Agente Arquitecto: DDD + hexagonal, ADRs, OpenAPI, diagrama | Dominio, puertos, adaptadores y ADRs |
-| 6. Generación | Agente QA diseña casos y se captura el **Golden Master del programa original**; Agente Desarrollador genera Java y se autocorrige con los errores del compilador, del análisis estático y del SAST | Compila; 0 hallazgos bloqueantes o críticos (calidad y seguridad) |
+| 6. Generación | Agente QA diseña casos y se captura el **Golden Master del programa original**; Agente Desarrollador genera Java y se autocorrige con los errores del compilador, del análisis estático y del SAST | Compila; 0 hallazgos bloqueantes o críticos (calidad y seguridad); complejidad ≤ 10 por método |
 | 7. Verificación | Equivalencia caso por caso contra el original (con autocorrección), pruebas JUnit 5 + JaCoCo, escenarios Gherkin ejecutables (Cucumber), SAST final (SpotBugs + FindSecBugs) | 100% equivalencia, pruebas y escenarios; cobertura ≥ 80% / 70%; complejidad ≤ 10; 0 vulnerabilidades críticas |
 | 8. Entrega | Agente Documentador + empaquetado: código, pruebas, reglas, trazabilidad, ADRs, reportes, Dockerfile, informe ejecutivo | Paquete ejecutable con un solo comando |
 

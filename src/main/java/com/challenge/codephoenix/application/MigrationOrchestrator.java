@@ -376,20 +376,25 @@ public class MigrationOrchestrator {
 				QualityReport quality = qualityAnalyzer.analyze(job.getGeneratedFiles());
 				phase.progress("Análisis de seguridad SAST (SpotBugs + FindSecBugs) en el sandbox (intento " + attempt + ")");
 				SecurityReport security = securityScan(job, dir);
+				// La complejidad es un hallazgo MAYOR, pero el gate de la fase 7 la exige: se corrige aquí, antes de
+				// verificar la equivalencia, para que la refactorización también quede validada contra el Golden Master.
 				List<QualityReport.Finding> severe = Stream.concat(quality.findings().stream(), security.findings().stream())
-					.filter(f -> f.severity().equals("BLOQUEANTE") || f.severity().equals("CRITICO"))
+					.filter(f -> f.severity().equals("BLOQUEANTE") || f.severity().equals("CRITICO")
+							|| f.rule().equals("complejidad-ciclomatica"))
 					.toList();
 				if (severe.isEmpty() && security.executed()) {
 					job.tested(null, quality);
 					pass(job, phase, true, "Compilación exitosa en el intento " + attempt + "; "
-							+ quality.filesAnalyzed() + " archivos, 0 hallazgos bloqueantes o críticos (calidad y SAST)");
+							+ quality.filesAnalyzed() + " archivos, 0 hallazgos bloqueantes o críticos (calidad y SAST), "
+							+ "complejidad máx. " + quality.maxMethodComplexity());
 					return new Characterization(golden, modern.outputs());
 				}
 				if (!security.executed()) {
 					throw new GateFailedException(Phase.GENERACION, "El análisis SAST no se pudo ejecutar:\n"
 							+ tail(security.output(), 1500));
 				}
-				problem = "HALLAZGOS CRÍTICOS DEL ANÁLISIS ESTÁTICO Y DE SEGURIDAD:\n" + severe.stream()
+				problem = "HALLAZGOS CRÍTICOS DEL ANÁLISIS ESTÁTICO Y DE SEGURIDAD (los de complejidad se corrigen extrayendo "
+						+ "métodos privados con nombre de negocio, sin cambiar el comportamiento):\n" + severe.stream()
 					.map(f -> "- [" + f.severity() + "] " + f.file() + ":" + f.line() + " " + f.message())
 					.collect(Collectors.joining("\n"));
 				job.log(Phase.GENERACION, "WARN", "Intento " + attempt + ": " + severe.size() + " hallazgos críticos");
