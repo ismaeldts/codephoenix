@@ -173,6 +173,10 @@ public class PlsqlStaticAnalyzer {
 		List<Unit> units = units(text, programOffset, entryPoint);
 		Set<String> unitNames = new LinkedHashSet<>();
 		units.forEach(u -> unitNames.add(u.name()));
+		// Nombres sin prefijo de paquete: dentro del cuerpo las rutinas se llaman sin él.
+		Set<String> shortNames = new LinkedHashSet<>();
+		units.forEach(u -> shortNames.add(shortName(u.name())));
+		Set<String> publicRoutines = publicRoutines(text, programOffset);
 
 		List<DataItem> dataItems = new ArrayList<>();
 		for (Param p : params) {
@@ -197,6 +201,7 @@ public class PlsqlStaticAnalyzer {
 			int decisions = 0;
 			boolean business = false;
 			boolean infrastructure = false;
+			String previous = "";
 			for (int line = unit.startLine(); line <= unit.endLine(); line++) {
 				if (ownerOf(units, line) != unit) {
 					continue;
@@ -205,6 +210,8 @@ public class PlsqlStaticAnalyzer {
 				if (clean.isBlank()) {
 					continue;
 				}
+				boolean statementStart = startsStatement(previous);
+				previous = clean;
 				String forDecisions = END_BLOCK.matcher(clean).replaceAll(" ");
 				Matcher d = DECISION.matcher(forDecisions);
 				while (d.find()) {
@@ -242,13 +249,13 @@ public class PlsqlStaticAnalyzer {
 					String owner = ext.group(1);
 					String target = owner + "." + ext.group(2);
 					if (!isBuiltinPackage(owner) && !variables.contains(owner) && !unitNames.contains(target)
-							&& !unitNames.contains(ext.group(2))) {
+							&& !shortNames.contains(ext.group(2))) {
 						edges.add(new CallEdge(unit.name(), target, "EXTERNA"));
 					}
 				}
 				Matcher stmt = STATEMENT_CALL.matcher(clean);
-				if (stmt.find() && !clean.contains(":=") && !KEYWORDS.contains(stmt.group(1))
-						&& !unitNames.contains(stmt.group(1)) && !variables.contains(stmt.group(1))
+				if (statementStart && stmt.find() && !clean.contains(":=") && !KEYWORDS.contains(stmt.group(1))
+						&& !shortNames.contains(stmt.group(1)) && !variables.contains(stmt.group(1))
 						&& !isBuiltinPackage(stmt.group(1)) && !isUnitHeader(clean) && !clean.contains("<<")) {
 					edges.add(new CallEdge(unit.name(), stmt.group(1), "EXTERNA"));
 				}
@@ -278,7 +285,10 @@ public class PlsqlStaticAnalyzer {
 		List<Paragraph> paragraphs = new ArrayList<>();
 		int totalComplexity = 0;
 		for (Unit unit : units) {
-			boolean reachable = unit.name().equals(entryPoint) || called.contains(unit.name());
+			// Alcanzable: la rutina de entrada, cualquier rutina pública del paquete (se invoca desde fuera)
+			// o una llamada desde otra unidad.
+			boolean reachable = unit.name().equals(entryPoint) || publicRoutines.contains(shortName(unit.name()))
+					|| called.contains(unit.name());
 			int c = complexity.getOrDefault(unit.name(), 1);
 			totalComplexity += c;
 			boolean[] f = flags.getOrDefault(unit.name(), new boolean[2]);
@@ -648,6 +658,40 @@ public class PlsqlStaticAnalyzer {
 			risks.add(new RiskItem(p.name(), level, reasons.isEmpty() ? "lógica simple" : String.join("; ", reasons)));
 		}
 		return risks;
+	}
+
+	private static String shortName(String name) {
+		return name.contains(".") ? name.substring(name.lastIndexOf('.') + 1) : name;
+	}
+
+	/**
+	 * Una línea empieza una instrucción si la anterior terminó una (;), abrió un bloque o es una
+	 * etiqueta. Evita confundir la continuación de una expresión (por ejemplo "TO_CHAR(...));") con
+	 * una llamada a una rutina.
+	 */
+	private static boolean startsStatement(String previousCleanLine) {
+		String prev = previousCleanLine.strip();
+		if (prev.isEmpty() || prev.endsWith(";") || prev.endsWith(">>")) {
+			return true;
+		}
+		return prev.matches("(?s).*(?<![\\w$#])(BEGIN|THEN|ELSE|LOOP|IS|AS|DECLARE|EXCEPTION)$");
+	}
+
+	/** Rutinas declaradas en la especificación del paquete: son la interfaz pública. */
+	private static Set<String> publicRoutines(Text text, int programOffset) {
+		Set<String> names = new LinkedHashSet<>();
+		String clean = text.clean();
+		Matcher spec = PACKAGE_HEADER.matcher(clean);
+		if (!spec.find(programOffset)) {
+			return names;
+		}
+		Matcher end = Pattern.compile("(?<![\\w$#])END\\s+" + spec.group(1) + "\\s*;").matcher(clean);
+		int specEnd = end.find(spec.end()) ? end.start() : clean.length();
+		Matcher decl = UNIT_DECL.matcher(clean.substring(spec.end(), specEnd));
+		while (decl.find()) {
+			names.add(decl.group(2));
+		}
+		return names;
 	}
 
 	private static boolean isBuiltinPackage(String name) {

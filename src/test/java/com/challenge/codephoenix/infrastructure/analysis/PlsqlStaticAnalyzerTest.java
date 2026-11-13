@@ -93,6 +93,45 @@ class PlsqlStaticAnalyzerTest {
 	}
 
 	@Test
+	void handlesPackagesWithPublicRoutinesAndMultiLineExpressions() {
+		String code = """
+				CREATE TABLE t_log (id NUMBER(10), mensaje VARCHAR2(200));
+				CREATE OR REPLACE PACKAGE pkg_demo AS
+				    PROCEDURE pr_uno (p_id IN NUMBER);
+				    PROCEDURE pr_lote (p_fecha IN DATE);
+				END pkg_demo;
+				/
+				CREATE OR REPLACE PACKAGE BODY pkg_demo AS
+				    PROCEDURE pr_log (p_msg IN VARCHAR2) IS
+				    BEGIN
+				        INSERT INTO t_log (id, mensaje) VALUES (1, p_msg);
+				    END pr_log;
+				    FUNCTION fn_sin_uso (p_x IN NUMBER) RETURN NUMBER IS
+				    BEGIN
+				        RETURN p_x;
+				    END fn_sin_uso;
+				    PROCEDURE pr_uno (p_id IN NUMBER) IS
+				    BEGIN
+				        pr_log('uno');
+				    END pr_uno;
+				    PROCEDURE pr_lote (p_fecha IN DATE) IS
+				    BEGIN
+				        pr_log('Inicio: ' ||
+				               TO_CHAR(p_fecha, 'YYYY-MM-DD'));
+				        pr_uno(1);
+				    END pr_lote;
+				END pkg_demo;
+				/
+				""";
+
+		StaticAnalysis analysis = analyzer.analyze(code);
+
+		assertEquals("PKG_DEMO.PR_UNO", analysis.plsql().entryPoint());
+		assertTrue(analyzer.unresolvedTargets(analysis).isEmpty(), () -> "sin resolver: " + analyzer.unresolvedTargets(analysis));
+		assertEquals(List.of("FN_SIN_USO"), analysis.deadParagraphs());
+	}
+
+	@Test
 	void splitsSchemaFromProgram() throws IOException {
 		PlsqlStaticAnalyzer.Source source = analyzer.split(sampleCode());
 
