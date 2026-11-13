@@ -59,6 +59,7 @@ code, pre, textarea, .mono { font-family: var(--mono); }
 .btn {
   border: 1px solid var(--border); background: var(--surface); color: var(--text);
   padding: 8px 14px; border-radius: 8px; font: inherit; font-weight: 500; cursor: pointer;
+  display: inline-block; white-space: nowrap; text-decoration: none;
 }
 .btn:hover { border-color: #cfc8bd; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -192,7 +193,9 @@ tr.clickable:hover td { background: var(--surface-2); }
 .code .comment { color: #8f8a80; }
 
 .rules { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 16px; }
-.rule-list { display: grid; gap: 8px; align-content: start; }
+/* La pista se limita al ancho de la columna: una tabla de decisión ancha se desplaza dentro de su panel
+   en vez de ensanchar las tarjetas por debajo del detalle. */
+.rule-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; min-width: 0; }
 .rule-item {
   text-align: left; font: inherit; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
   background: var(--surface); cursor: pointer;
