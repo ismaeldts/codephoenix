@@ -728,8 +728,10 @@ function formatDuration(ms) {
 
 function afterRender() {
   document.querySelectorAll('[data-scroll]').forEach(el => {
+    // Posición de la línea relativa al visor (offsetTop se mide contra un ancestro de la página).
     const container = el.closest('.code');
-    container.scrollTop = el.offsetTop - 60;
+    const offset = el.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    container.scrollTop += offset - 60;
   });
   document.querySelectorAll('.mermaid').forEach(async (el, i) => {
     const source = el.textContent;

@@ -208,9 +208,13 @@ tr.clickable:hover td { background: var(--surface-2); }
 .confidence span { display: block; height: 100%; background: var(--ok); }
 .confidence span.mid { background: var(--warn); }
 .confidence span.low { background: var(--err); }
-.rule-detail dl { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; margin: 10px 0; }
+.rule-detail { min-width: 0; display: grid; gap: 12px; align-content: start; }
+.rule-detail dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 12px; margin: 10px 0; }
 .rule-detail dt { color: var(--muted); font-size: 12px; font-weight: 600; }
-.rule-detail dd { margin: 0; }
+.rule-detail dd { margin: 0; overflow-wrap: anywhere; }
+.rule-detail .gherkin { overflow-wrap: anywhere; }
+/* El fragmento de código acompaña al detalle sin desbalancear la columna. */
+.rule-detail .code { max-height: 380px; }
 .gherkin { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font: 12px/1.6 var(--mono); white-space: pre-wrap; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .approve-bar {
