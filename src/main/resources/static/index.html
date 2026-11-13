@@ -39,9 +39,10 @@
           <h3>1 · Artefacto legacy</h3>
           <div id="samples" class="samples"></div>
           <label class="upload">
-            <input type="file" id="file-input" accept=".cbl,.cob,.cpy,.txt,.sql,.pls,.rpg,.rpgle">
-            <span>o carga un archivo desde tu equipo</span>
+            <input type="file" id="file-input" multiple accept=".zip,.cbl,.cob,.cpy,.txt,.sql,.pks,.pkb,.pls,.prc,.fnc,.ddl">
+            <span>o carga un archivo, varios archivos o un .zip del proyecto desde tu equipo</span>
           </label>
+          <div id="bundle-info" class="bundle hidden"></div>
           <div class="field">
             <label for="source-name">Nombre del archivo</label>
             <input id="source-name" placeholder="PROGRAMA.cbl">

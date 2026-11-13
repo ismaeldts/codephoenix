@@ -46,7 +46,7 @@ class PlsqlHarnessTest {
 		PlsqlModel model = model();
 
 		assertNull(PlsqlHarness.validate(model, PlsqlHarness.parse(CASE)));
-		assertEquals("El parámetro P_ESTADO no existe o no es de entrada",
+		assertEquals("El parámetro P_ESTADO no existe o no es de entrada en LIQUIDA_SINIESTRO",
 				PlsqlHarness.validate(model, PlsqlHarness.parse("PARAM|P_ESTADO|X")));
 		assertEquals("La columna POLIZAS.COLOR no existe",
 				PlsqlHarness.validate(model, PlsqlHarness.parse("ROW|POLIZAS|COLOR=1")));
@@ -66,6 +66,55 @@ class PlsqlHarnessTest {
 		assertTrue(script.contains("FOR r IN (SELECT * FROM PAGOS_SINIESTRO) LOOP"));
 		assertTrue(script.contains("'|NETO=' || cp_num(r.NETO)"));
 		assertTrue(script.contains("BEGIN DELETE FROM SINIESTROS; EXCEPTION WHEN OTHERS THEN NULL; END;"));
+	}
+
+	private static final String PACKAGE = """
+			CREATE TABLE cliente (id NUMBER(10) PRIMARY KEY, nombre VARCHAR2(50));
+			CREATE TABLE pedido (id NUMBER(10) PRIMARY KEY, cliente_id NUMBER(10) REFERENCES cliente (id),
+			  estado VARCHAR2(10), usuario VARCHAR2(30), fecha DATE);
+			CREATE SEQUENCE seq_pedido START WITH 100 INCREMENT BY 1;
+			CREATE OR REPLACE PACKAGE pkg_pedidos AS
+			    PROCEDURE pr_aprobar (p_id IN NUMBER);
+			    PROCEDURE pr_lote (p_fecha IN DATE DEFAULT TRUNC(SYSDATE));
+			END pkg_pedidos;
+			/
+			CREATE OR REPLACE PACKAGE BODY pkg_pedidos AS
+			    PROCEDURE pr_aprobar (p_id IN NUMBER) IS
+			    BEGIN
+			        UPDATE pedido SET estado = 'OK', usuario = USER, fecha = SYSDATE WHERE id = p_id;
+			    END pr_aprobar;
+			    PROCEDURE pr_lote (p_fecha IN DATE DEFAULT TRUNC(SYSDATE)) IS
+			    BEGIN
+			        FOR r IN (SELECT id FROM pedido) LOOP
+			            pr_aprobar(r.id);
+			        END LOOP;
+			        DBMS_OUTPUT.PUT_LINE('fin');
+			    END pr_lote;
+			END pkg_pedidos;
+			/
+			""";
+
+	@Test
+	void callsTheChosenRoutineRestartsSequencesAndInsertsParentsFirst() {
+		PlsqlModel model = new PlsqlStaticAnalyzer().analyze(PACKAGE).plsql();
+		PlsqlHarness.ParsedCase parsed = PlsqlHarness.parse("""
+				CALL|PR_LOTE
+				ROW|PEDIDO|ID=1|CLIENTE_ID=7|ESTADO=NUEVO
+				ROW|CLIENTE|ID=7|NOMBRE=ANA
+				""");
+
+		assertNull(PlsqlHarness.validate(model, parsed));
+		String script = PlsqlHarness.caseScript(model, parsed);
+
+		assertTrue(script.contains("ALTER SEQUENCE SEQ_PEDIDO RESTART START WITH 100"));
+		assertTrue(script.indexOf("INSERT INTO CLIENTE") < script.indexOf("INSERT INTO PEDIDO"));
+		assertTrue(script.indexOf("DELETE FROM PEDIDO") < script.indexOf("DELETE FROM CLIENTE"));
+		assertTrue(script.contains("PKG_PEDIDOS.PR_LOTE;"), "el parámetro omitido toma su DEFAULT");
+		assertTrue(script.indexOf("COMMIT;") < script.indexOf("PKG_PEDIDOS.PR_LOTE;"),
+				"la preparación se confirma antes de invocar para no bloquear transacciones autónomas");
+		assertTrue(script.contains("RETURN 'USUARIO_BD'"));
+		assertTrue(script.contains("RETURN 'FECHA_SISTEMA'"));
+		assertTrue(PlsqlHarness.validate(model, PlsqlHarness.parse("CALL|PR_OCULTA")).contains("no es pública"));
 	}
 
 	@Test

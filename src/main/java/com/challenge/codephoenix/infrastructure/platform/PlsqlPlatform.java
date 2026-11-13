@@ -132,23 +132,47 @@ public class PlsqlPlatform implements LegacyPlatform {
 	@Override
 	public String caseInstructions(MigrationJob job) {
 		PlsqlModel model = job.getAnalysis().plsql();
+		String seeds = seedSummary(model);
 		return """
-				Firma de la rutina: %s
+				Rutinas públicas que se pueden invocar (la primera es la rutina por defecto):
+				%s
 				Esquema de datos:
 				%s
 				Tablas que lee: %s · tablas que modifica: %s
-
+				%s
 				Para cada caso:
-				- `params`: valores de los parámetros de ENTRADA por su nombre exacto (números con punto, fechas
-				  yyyy-MM-dd). Un parámetro omitido vale NULL.
+				- `routine`: nombre corto de la rutina a invocar (vacío = la rutina por defecto). Cubre TODAS las rutinas
+				  públicas; las de proceso por lotes con varios registros a la vez.
+				- `params`: valores de los parámetros de ENTRADA de esa rutina por su nombre exacto (números con punto,
+				  fechas yyyy-MM-dd). Un parámetro omitido toma su valor DEFAULT o NULL.
 				- `fixtures`: filas iniciales por tabla (nombre exacto de la tabla → lista de filas; cada fila es un
-				  objeto columna → valor). Incluye las filas de TODAS las tablas que la rutina lee, con todas las
-				  columnas NOT NULL, y respeta las relaciones entre tablas. Para NULL usa el texto "\\N".
+				  objeto columna → valor). Incluye las filas de TODAS las tablas que la rutina lee (salvo las de datos de
+				  referencia, que se cargan solas), con todas las columnas NOT NULL, y respeta las claves foráneas. Usa
+				  las filas MÍNIMAS que necesita el caso (un lote de 3 a 5 registros basta) y omite las columnas
+				  anulables que la rutina no usa. Para
+				  NULL usa el texto "\\N".
 				- Deja `fields` e `input` vacíos.
 				- Incluye casos donde falten filas (errores por datos inexistentes) y valores frontera exactos de fechas
 				  (por ejemplo el día justo en que vence un plazo) e importes.
-				""".formatted(signature(model), schemaText(model), String.join(", ", model.tablesRead()),
-				String.join(", ", model.tablesWritten()));
+				""".formatted(routinesText(model), schemaText(model), String.join(", ", model.tablesRead()),
+				String.join(", ", model.tablesWritten()), seeds.isEmpty() ? "" : "\n" + seeds + "\n");
+	}
+
+	/** Descripción de los datos de referencia que se añaden automáticamente a cada caso. */
+	private static String seedSummary(PlsqlModel model) {
+		if (model.seedRows().isEmpty()) {
+			return "";
+		}
+		Map<String, Long> perTable = model.seedRows()
+			.stream()
+			.collect(Collectors.groupingBy(PlsqlModel.SeedRow::table, java.util.LinkedHashMap::new, Collectors.counting()));
+		String sample = model.seedRows()
+			.stream()
+			.limit(30)
+			.map(r -> "  " + r.table() + " " + r.values())
+			.collect(Collectors.joining("\n"));
+		return "Datos de referencia del artefacto (se añaden SOLOS a cada caso; no los repitas salvo que quieras "
+				+ "cambiar esa tabla completa): " + perTable + "\n" + sample;
 	}
 
 	@Override
@@ -197,37 +221,66 @@ public class PlsqlPlatform implements LegacyPlatform {
 	@Override
 	public String ioContract(MigrationJob job) {
 		PlsqlModel model = job.getAnalysis().plsql();
-		String outputs = model.outputs().stream().map(PlsqlModel.Param::name).collect(Collectors.joining(", "));
 		String written = model.tablesWritten().stream()
 			.map(t -> model.table(t)
 				.map(table -> t + "(" + table.columns().stream().map(PlsqlModel.Column::name).collect(Collectors.joining(", ")) + ")")
 				.orElse(t))
 			.collect(Collectors.joining("; "));
+		String sequences = model.sequences().isEmpty() ? "(no hay)" : model.sequences()
+			.stream()
+			.map(s -> s.name() + " empieza en " + s.start() + " e incrementa " + s.increment())
+			.collect(Collectors.joining("; "));
 		return """
-				Adaptador CLI de caracterización `%s` (reproduce el contrato con el que se ejecutó %s en Oracle):
+				Adaptador CLI de caracterización `%s` (reproduce el contrato con el que se ejecutó el programa en Oracle):
 				- `public static java.util.List<String> process(java.util.List<String> inputLines)`
 				- `public static void main(String[] args)`: lee TODAS las líneas de System.in, llama a process e imprime
 				  cada línea devuelta con System.out.println.
 
+				Rutinas públicas (la primera es la rutina por defecto):
+				%s
+
 				Entrada (una instrucción por línea):
-				  PARAM|<PARAMETRO>|<valor>          parámetros de entrada de %s
-				  ROW|<TABLA>|<COLUMNA>=<valor>|...  filas iniciales: cárgalas en los repositorios en memoria
+				  CALL|<RUTINA>                      opcional: nombre corto de la rutina a invocar
+				  PARAM|<PARAMETRO>|<valor>          parámetros de entrada de esa rutina
+				  ROW|<TABLA>|<COLUMNA>=<valor>|...  filas iniciales (incluye los datos de referencia, por ejemplo
+				                                     parámetros de negocio): cárgalas en los repositorios en memoria
 				  Valores: números con punto, fechas `yyyy-MM-dd HH:mm:ss` o `yyyy-MM-dd`, `\\N` = NULL. Un parámetro
-				  ausente es NULL.
+				  ausente toma su valor DEFAULT de la firma, o NULL si no tiene. Una columna ausente en una fila toma su
+				  DEFAULT del esquema (DEFAULT USER → `%s`, DEFAULT SYSDATE → `%s`).
 
 				Salida, en este orden:
-				  1. Si la rutina termina bien: %suna línea `OUT|<PARAMETRO>|<valor>` por cada parámetro de salida, en
-				     este orden: %s.
-				     Si termina con una excepción: UNA sola línea `ERR|<SQLCODE>|<mensaje>` y ninguna línea OUT.
-				     Ejemplos: RAISE_APPLICATION_ERROR(-20010, 'X') → `ERR|-20010|X`; NO_DATA_FOUND → `ERR|100|no data found`.
-				  2. Siempre (también tras ERR): el contenido final de cada tabla modificada, una línea por fila:
+				  1. Las líneas que el programa imprime con DBMS_OUTPUT.PUT_LINE, idénticas y en el mismo orden.
+				  2. Si la rutina termina bien: `RET|<valor>` si es función y una línea `OUT|<PARAMETRO>|<valor>` por cada
+				     parámetro de salida, en el orden de la firma.
+				     Si termina con una excepción no controlada: UNA sola línea `ERR|<SQLCODE>|<mensaje>` y ninguna
+				     línea RET/OUT. Ejemplos: RAISE_APPLICATION_ERROR(-20010, 'X') → `ERR|-20010|X`; NO_DATA_FOUND →
+				     `ERR|100|no data found`.
+				  3. Siempre (también tras ERR): el contenido final de cada tabla modificada, una línea por fila:
 				     `ROW|<TABLA>|<COL>=<valor>|...` con TODAS las columnas en este orden: %s.
-				     El orden entre filas no importa. Los cambios hechos antes de una excepción permanecen.
-				  Formato: números con `stripTrailingZeros().toPlainString()` (0 → 0, 10661.10 → 10661.1), fechas
-				  `yyyy-MM-dd HH:mm:ss`, NULL → `\\N`.
-				""".formatted(DeveloperAgent.mainClass(job.getArchitecture().basePackage()), model.entryPoint(),
-				signature(model), model.isFunction() ? "`RET|<valor>` y luego " : "", outputs.isEmpty() ? "(ninguno)" : outputs,
-				written.isEmpty() ? "(ninguna)" : written);
+				     El orden entre filas no importa. Los cambios hechos antes de una excepción permanecen, salvo los que
+				     el propio programa deshace (ROLLBACK TO SAVEPOINT); lo escrito en transacciones autónomas permanece.
+
+				Reproducibilidad (el Golden Master se normalizó así; tu salida debe hacer lo mismo):
+				  - Secuencias: cada ejecución empieza desde su valor inicial: %s.
+				  - El usuario de base de datos (USER) se escribe como `%s`.
+				  - La fecha-hora actual del sistema (SYSDATE) se escribe como `%s` y la fecha de hoy sin hora
+				    (TRUNC(SYSDATE)) como `%s`. Modela el reloj como un puerto de salida y en el adaptador CLI usa un
+				    reloj cuyos valores se impriman con esos marcadores.
+				Formato: números con `stripTrailingZeros().toPlainString()` (0 → 0, 10661.10 → 10661.1), fechas
+				`yyyy-MM-dd HH:mm:ss`, NULL → `\\N`.
+				""".formatted(DeveloperAgent.mainClass(job.getArchitecture().basePackage()), routinesText(model),
+				PlsqlHarness.DB_USER, PlsqlHarness.SYSTEM_TIME, written.isEmpty() ? "(ninguna)" : written, sequences,
+				PlsqlHarness.DB_USER, PlsqlHarness.SYSTEM_TIME, PlsqlHarness.SYSTEM_DAY);
+	}
+
+	private static String routinesText(PlsqlModel model) {
+		return model.routines()
+			.stream()
+			.map(r -> "- " + r.shortName() + "(" + r.params()
+				.stream()
+				.map(p -> p.name() + " " + p.mode() + " " + p.type())
+				.collect(Collectors.joining(", ")) + ")" + (r.isFunction() ? " RETURN " + r.returnType() : ""))
+			.collect(Collectors.joining("\n"));
 	}
 
 	@Override
@@ -250,8 +303,12 @@ public class PlsqlPlatform implements LegacyPlatform {
 
 	private static String encode(PlsqlModel model, QaAgent.CaseDraft draft) {
 		StringBuilder sb = new StringBuilder();
+		PlsqlModel.Routine routine = model.routine(draft.routine()).orElse(model.defaultRoutine());
+		if (draft.routine() != null && !draft.routine().isBlank()) {
+			sb.append("CALL|").append(draft.routine().strip().toUpperCase()).append('\n');
+		}
 		Map<String, String> params = draft.params() == null ? Map.of() : draft.params();
-		for (PlsqlModel.Param p : model.params()) {
+		for (PlsqlModel.Param p : routine.params()) {
 			params.entrySet()
 				.stream()
 				.filter(e -> e.getKey().equalsIgnoreCase(p.name()))
@@ -260,7 +317,7 @@ public class PlsqlPlatform implements LegacyPlatform {
 		}
 		params.keySet()
 			.stream()
-			.filter(k -> model.params().stream().noneMatch(p -> p.name().equalsIgnoreCase(k)))
+			.filter(k -> routine.params().stream().noneMatch(p -> p.name().equalsIgnoreCase(k)))
 			.forEach(k -> sb.append("PARAM|").append(k.toUpperCase()).append('|').append(value(params.get(k))).append('\n'));
 		if (draft.fixtures() != null) {
 			draft.fixtures().forEach((table, rows) -> {
@@ -278,9 +335,54 @@ public class PlsqlPlatform implements LegacyPlatform {
 		return v == null ? PlsqlHarness.NULL : v.replace("|", "/").replace("\n", " ");
 	}
 
+	/**
+	 * Añade al caso los datos de referencia del artefacto para las tablas que el caso no define, de modo
+	 * que Oracle y el código moderno reciben exactamente la misma entrada.
+	 */
+	static String withSeeds(PlsqlModel model, String input) {
+		if (model.seedRows().isEmpty()) {
+			return input;
+		}
+		Set<String> tablesInCase = new LinkedHashSet<>();
+		for (String line : input.split("\r?\n")) {
+			String[] parts = line.strip().split("\\|", -1);
+			if (parts.length > 1 && parts[0].equals("ROW")) {
+				tablesInCase.add(parts[1].toUpperCase());
+			}
+		}
+		StringBuilder seeds = new StringBuilder();
+		for (PlsqlModel.SeedRow row : model.seedRows()) {
+			if (tablesInCase.contains(row.table())) {
+				continue;
+			}
+			seeds.append("ROW|").append(row.table());
+			row.values().forEach((column, v) -> seeds.append('|').append(column).append('=').append(value(v)));
+			seeds.append('\n');
+		}
+		if (seeds.isEmpty()) {
+			return input;
+		}
+		// CALL y PARAM primero, después los datos de referencia y por último las filas del caso.
+		StringBuilder head = new StringBuilder();
+		StringBuilder rows = new StringBuilder();
+		for (String line : input.split("\r?\n")) {
+			if (line.startsWith("ROW|")) {
+				rows.append(line).append('\n');
+			}
+			else if (!line.isBlank()) {
+				head.append(line).append('\n');
+			}
+		}
+		return (head.toString() + seeds + rows).strip();
+	}
+
 	private static void addIfValid(MigrationJob job, PlsqlModel model, List<TestCase> cases, Set<String> seen, String input,
 			String description, String kind, List<String> ruleIds) {
-		if (input == null || input.isBlank() || !seen.add(input)) {
+		if (input == null || input.isBlank()) {
+			return;
+		}
+		input = withSeeds(model, input.strip());
+		if (!seen.add(input)) {
 			return;
 		}
 		String problem;

@@ -195,9 +195,30 @@ ROW|SINIESTROS|SINIESTRO_ID=1001|...     ROW|PAGOS_SINIESTRO|SINIESTRO_ID=1001|M
                                          ROW|SINIESTROS|...|ESTADO=LIQUIDADO|...
 ```
 
-`PlsqlHarness` convierte cada caso en un script SQL*Plus que limpia las tablas, inserta las filas, invoca la
-rutina con notación nombrada, imprime los parámetros `OUT` o `ERR|SQLCODE|mensaje`, y vuelca el estado final
-de las tablas que la rutina modifica. Números sin ceros sobrantes, fechas `yyyy-MM-dd HH:mm:ss`, nulo `\N`.
+`PlsqlHarness` convierte cada caso en un script SQL*Plus que reinicia las secuencias, limpia las tablas (hijas
+primero), inserta las filas (padres primero, según las `REFERENCES` del DDL), invoca la rutina con notación
+nombrada, imprime lo que la rutina escribe con `DBMS_OUTPUT`, los parámetros `OUT`/`RET` o `ERR|SQLCODE|mensaje`,
+y vuelca el estado final de las tablas que la rutina modifica. Números sin ceros sobrantes, fechas
+`yyyy-MM-dd HH:mm:ss`, nulo `\N`.
+
+- **Paquetes con varias rutinas públicas.** Una línea opcional `CALL|RUTINA` elige qué procedimiento o función
+  del paquete invoca el caso (por defecto, la primera de la especificación). Los parámetros de entrada omitidos
+  toman su valor `DEFAULT`.
+- **Datos de referencia.** Los `INSERT` del artefacto (por ejemplo, una tabla de parámetros) forman parte de la
+  base de cada caso, en Oracle y en Java, salvo que el caso defina sus propias filas para esa tabla.
+- **Reproducibilidad.** Las secuencias se reinician en cada caso; el usuario de base de datos se escribe
+  `USUARIO_BD` y la fecha-hora del sistema `FECHA_SISTEMA` (o `FECHA_SISTEMA_DIA` si es la fecha de hoy sin
+  hora). El código Java modela el reloj y el usuario como puertos de salida y el adaptador CLI usa esos marcadores.
+- **Transacciones autónomas.** La preparación del caso se confirma (`COMMIT`) antes de invocar la rutina, para
+  que un log con `PRAGMA AUTONOMOUS_TRANSACTION` no espere filas bloqueadas por la propia sesión (ORA-00060).
+
+### Proyectos de varios archivos
+
+La interfaz acepta varios archivos o un `.zip` (`POST /api/artifacts/bundle`). `ArtifactBundler` descarta
+basura de sistema (`__MACOSX`, `._*`), clasifica cada archivo por su contenido (esquema, datos de referencia,
+especificación, cuerpo, datos de prueba, script de ejecución) y concatena el artefacto en orden de compilación.
+Los datos de prueba y las llamadas del script de ejecución no forman parte del artefacto: se convierten en un
+caso `CALL`/`PARAM`/`ROW` que entra al Golden Master junto a los que diseña el agente QA.
 
 ## 6. Soporte de lenguajes (patrón Strategy)
 
@@ -305,6 +326,7 @@ aprobación pueden continuar y las que estaban en curso se marcan como detenidas
 |---|---|---|
 | GET | `/api/status` | Disponibilidad de los sandboxes |
 | GET | `/api/samples`, `/api/samples/{id}` | Ejemplos incluidos |
+| POST | `/api/artifacts/bundle` | Ordenar un proyecto (multipart `files`: varios archivos o un `.zip`) |
 | POST | `/api/jobs` | Iniciar migración `{sourceName, code, domainName, targetStack, caseInputs}` |
 | GET | `/api/jobs`, `/api/jobs/{id}` | Listado y estado completo |
 | POST | `/api/jobs/{id}/rules/{ruleId}` | Decisión `{decision: APROBAR\|AJUSTAR\|RECHAZAR, comment, ...}` |
@@ -340,9 +362,9 @@ paquete-migracion-<id>.zip
 
 ## 14. Limitaciones conocidas
 
-- Un artefacto por migración: COBOL con `COPY` (copybooks), archivos VSAM o `EXEC SQL` no se ejecutan en el
-  sandbox; los paquetes PL/SQL se analizan pero solo se ha probado de extremo a extremo con procedimientos.
+- COBOL con `COPY` (copybooks), archivos VSAM o `EXEC SQL` no se ejecutan en el sandbox.
 - El análisis estático se basa en patrones, no en un árbol sintáctico completo.
-- Las secuencias de Oracle no se reinician entre casos; las funciones no deterministas (`SYSDATE`) se
-  advierten pero pueden hacer variar el Golden Master.
+- `SYSDATE` y `USER` se normalizan solo cuando se escriben tal cual en una columna o salida; un valor derivado
+  (por ejemplo, `SYSDATE - fecha_ocurrencia` en días) depende del día de ejecución y debe fijarse con un
+  parámetro de fecha en el caso.
 - Solo Java 21 como destino.

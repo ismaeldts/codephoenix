@@ -309,8 +309,17 @@ public class PlsqlStaticAnalyzer {
 			}
 		}
 
-		PlsqlModel model = new PlsqlModel(entryPoint, kind, returnType, params, schema, List.copyOf(tablesRead),
-				List.copyOf(tablesWritten), missing, nonDeterministic);
+		List<PlsqlModel.Routine> routines = routines(text, programOffset, entryPoint, kind, params, returnType);
+		List<PlsqlModel.Sequence> sequences = new ArrayList<>(parseSequences(text.clean()));
+		if (extraDdl != null && !extraDdl.isBlank()) {
+			parseSequences(prepare(extraDdl).clean()).stream()
+				.filter(s -> sequences.stream().noneMatch(x -> x.name().equals(s.name())))
+				.forEach(sequences::add);
+		}
+		// Datos de referencia: los INSERT que el artefacto ejecuta antes del programa (por ejemplo parámetros).
+		List<PlsqlModel.SeedRow> seeds = SqlInsertParser.parseInserts(code.substring(0, programOffset), schema).rows();
+		PlsqlModel model = new PlsqlModel(entryPoint, kind, returnType, params, routines, schema, sequences, seeds,
+				List.copyOf(tablesRead), List.copyOf(tablesWritten), missing, nonDeterministic);
 		return new StaticAnalysis(entryPoint == null ? "DESCONOCIDO" : entryPoint, text.lines(), codeLines,
 				commentLines, paragraphs, dataItems, distinctEdges, dead, goToCount, infra, totalComplexity,
 				riskMap(paragraphs, distinctEdges, nonDeterministic, units, tablesWritten, infra), List.of(), model);
@@ -468,9 +477,58 @@ public class PlsqlStaticAnalyzer {
 				boolean nullable = !rest.contains("NOT NULL") && !rest.contains("PRIMARY KEY");
 				columns.add(new Column(col.group(1), col.group(2).replaceAll("\\s+", ""), nullable));
 			}
-			tables.add(new Table(m.group(1), columns));
+			List<String> references = new ArrayList<>();
+			Matcher ref = REFERENCES.matcher(clean.substring(m.end(), close));
+			while (ref.find()) {
+				if (!ref.group(1).equals(m.group(1)) && !references.contains(ref.group(1))) {
+					references.add(ref.group(1));
+				}
+			}
+			tables.add(new Table(m.group(1), columns, references));
 		}
 		return tables;
+	}
+
+	private static final Pattern REFERENCES = Pattern.compile("(?<![\\w$#])REFERENCES\\s+(?:\\w+\\.)?(\\w+)");
+	private static final Pattern CREATE_SEQUENCE = Pattern
+		.compile("CREATE\\s+SEQUENCE\\s+(?:\\w+\\.)?(\\w+)([^;]*);");
+
+	private static List<PlsqlModel.Sequence> parseSequences(String clean) {
+		List<PlsqlModel.Sequence> sequences = new ArrayList<>();
+		Matcher m = CREATE_SEQUENCE.matcher(clean);
+		while (m.find()) {
+			Matcher start = Pattern.compile("START\\s+WITH\\s+(-?\\d+)").matcher(m.group(2));
+			Matcher increment = Pattern.compile("INCREMENT\\s+BY\\s+(-?\\d+)").matcher(m.group(2));
+			sequences.add(new PlsqlModel.Sequence(m.group(1), start.find() ? Long.parseLong(start.group(1)) : 1,
+					increment.find() ? Long.parseLong(increment.group(1)) : 1));
+		}
+		return sequences;
+	}
+
+	/** Rutinas invocables: la rutina independiente, o las declaradas en la especificación del paquete. */
+	private static List<PlsqlModel.Routine> routines(Text text, int programOffset, String standaloneName,
+			String standaloneKind, List<Param> standaloneParams, String standaloneReturn) {
+		List<PlsqlModel.Routine> result = new ArrayList<>();
+		String clean = text.clean();
+		Matcher spec = PACKAGE_HEADER.matcher(clean);
+		if (standaloneName != null && !standaloneName.contains(".")) {
+			result.add(new PlsqlModel.Routine(standaloneName, standaloneKind, standaloneReturn, standaloneParams));
+			return result;
+		}
+		if (!spec.find(programOffset)) {
+			return result;
+		}
+		Matcher end = Pattern.compile("(?<![\\w$#])END\\s+" + spec.group(1) + "\\s*;").matcher(clean);
+		int specEnd = end.find(spec.end()) ? end.start() : clean.length();
+		Matcher decl = UNIT_DECL.matcher(clean);
+		int from = spec.end();
+		while (decl.find(from) && decl.start() < specEnd) {
+			from = decl.end();
+			String[] signature = signature(text, decl.end());
+			result.add(new PlsqlModel.Routine(spec.group(1) + "." + decl.group(2), decl.group(1), signature[1],
+					parseParams(signature[0])));
+		}
+		return result;
 	}
 
 	/** Devuelve {lista de parámetros, tipo de retorno} a partir del final del nombre de la rutina. */

@@ -5,7 +5,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.stream.Collectors;
@@ -56,8 +58,8 @@ public class AgentGateway {
 
 		LIGERO(OutputConfig.Effort.LOW, 6_000),
 		ESTANDAR(OutputConfig.Effort.MEDIUM, 20_000),
-		CODIGO(OutputConfig.Effort.MEDIUM, 32_000),
-		PROFUNDO(OutputConfig.Effort.HIGH, 32_000);
+		CODIGO(OutputConfig.Effort.MEDIUM, 64_000),
+		PROFUNDO(OutputConfig.Effort.HIGH, 64_000);
 
 		private final OutputConfig.Effort effort;
 		private final int maxTokens;
@@ -85,33 +87,26 @@ public class AgentGateway {
 	public String text(MigrationJob job, String agent, Profile profile, String system, String user) {
 		long start = System.currentTimeMillis();
 		String hash = sha256(system + "\n---\n" + user);
-		ChatResponse response;
+		Reply reply;
 		try {
-			response = chatClient.prompt()
+			ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
 				.options(AnthropicChatOptions.builder()
 					.model(model)
 					.maxTokens(profile.maxTokens)
 					.effort(profile.effort))
 				.system(system)
-				.user(user)
-				.call()
-				.chatResponse();
+				.user(user);
+			reply = profile.maxTokens > NON_STREAMING_MAX_TOKENS ? streamed(spec) : called(spec);
 		}
 		catch (RuntimeException ex) {
 			job.recordAudit(new AuditEntry(Instant.now(), agent, model, hash, true, 0, 0,
 					System.currentTimeMillis() - start, "ERROR: " + ex.getClass().getSimpleName()));
 			throw new AgentException(agent + " no respondió: " + ex.getMessage(), ex);
 		}
-		Usage usage = response.getMetadata().getUsage();
-		long in = usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens();
-		long out = usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens();
-		String finish = response.getResults()
-			.stream()
-			.map(g -> String.valueOf(g.getMetadata().getFinishReason()))
-			.filter(f -> !"null".equals(f))
-			.reduce((first, second) -> second)
-			.orElse("sin resultado");
-		String text = answerText(response);
+		long in = reply.inputTokens();
+		long out = reply.outputTokens();
+		String finish = reply.finishReason();
+		String text = reply.text();
 		saveRaw(job, agent, text);
 		boolean truncated = finish.toLowerCase(Locale.ROOT).contains("max_tokens")
 				|| finish.toLowerCase(Locale.ROOT).contains("length");
@@ -126,6 +121,57 @@ public class AgentGateway {
 			throw new AgentException(agent + " devolvió una respuesta vacía (motivo: " + finish + ").", null);
 		}
 		return text;
+	}
+
+	/** Por encima de este límite el SDK exige streaming para no agotar el tiempo de la petición HTTP. */
+	private static final int NON_STREAMING_MAX_TOKENS = 32_000;
+
+	private record Reply(String text, long inputTokens, long outputTokens, String finishReason) {
+	}
+
+	private static Reply called(ChatClient.ChatClientRequestSpec spec) {
+		ChatResponse response = spec.call().chatResponse();
+		Usage usage = response.getMetadata().getUsage();
+		long in = usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens();
+		long out = usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens();
+		return new Reply(answerText(response), in, out, finishReason(List.of(response)));
+	}
+
+	/** Respuestas largas: se reciben por streaming y se reúnen al terminar. */
+	private static Reply streamed(ChatClient.ChatClientRequestSpec spec) {
+		List<ChatResponse> chunks = spec.stream().chatResponse().collectList().block(Duration.ofMinutes(20));
+		if (chunks == null || chunks.isEmpty()) {
+			return new Reply("", 0, 0, "sin resultado");
+		}
+		StringBuilder text = new StringBuilder();
+		long in = 0;
+		long out = 0;
+		for (ChatResponse chunk : chunks) {
+			for (var generation : chunk.getResults()) {
+				if (Boolean.TRUE.equals(generation.getOutput().getMetadata().get("thinking"))) {
+					continue;
+				}
+				String piece = generation.getOutput().getText();
+				if (piece != null) {
+					text.append(piece);
+				}
+			}
+			Usage usage = chunk.getMetadata() == null ? null : chunk.getMetadata().getUsage();
+			if (usage != null) {
+				in = Math.max(in, usage.getPromptTokens() == null ? 0 : usage.getPromptTokens());
+				out = Math.max(out, usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
+			}
+		}
+		return new Reply(text.toString(), in, out, finishReason(chunks));
+	}
+
+	private static String finishReason(List<ChatResponse> responses) {
+		return responses.stream()
+			.flatMap(r -> r.getResults().stream())
+			.map(g -> String.valueOf(g.getMetadata().getFinishReason()))
+			.filter(f -> !"null".equals(f) && !f.isBlank())
+			.reduce((first, second) -> second)
+			.orElse("sin resultado");
 	}
 
 	/**

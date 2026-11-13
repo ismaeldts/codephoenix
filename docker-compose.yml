@@ -1,5 +1,7 @@
 # CodePhoenix con un solo comando:
-#   SPRING_AI_ANTHROPIC_API_KEY=... docker compose up --build
+#   docker compose up --build
+# con la clave en un archivo .env junto a este (SPRING_AI_ANTHROPIC_API_KEY=sk-ant-...),
+# que git ignora, o definida como variable de entorno.
 # y abre http://localhost:8080
 #
 # La primera vez construye la aplicación y el sandbox, y descarga Oracle Database Free (~6 GB).

@@ -121,9 +121,15 @@ async function loadSample(btn) {
   $('#domain-input').value = btn.dataset.domain;
 }
 
-function loadFile(event) {
-  const file = event.target.files[0];
-  if (!file) return;
+async function loadFile(event) {
+  const files = [...event.target.files];
+  if (!files.length) return;
+  $('#bundle-info').classList.add('hidden');
+  if (files.length > 1 || files[0].name.toLowerCase().endsWith('.zip')) {
+    await loadBundle(files);
+    return;
+  }
+  const file = files[0];
   if (file.size > 200000) { toast('El archivo supera los 200 KB admitidos en la demo.', true); return; }
   const reader = new FileReader();
   reader.onload = () => {
@@ -132,6 +138,35 @@ function loadFile(event) {
     document.querySelectorAll('.sample').forEach(b => b.classList.remove('selected'));
   };
   reader.readAsText(file);
+}
+
+/** Envía un .zip o varios archivos al servidor, que identifica cada uno y arma el artefacto. */
+async function loadBundle(files) {
+  const form = new FormData();
+  files.forEach(f => form.append('files', f, f.name));
+  try {
+    const response = await fetch('/api/artifacts/bundle', { method: 'POST', body: form });
+    if (!response.ok) {
+      let message = `Error ${response.status}`;
+      try { message = (await response.json()).message || message; } catch (_) { /* sin cuerpo */ }
+      throw new Error(message);
+    }
+    const bundle = await response.json();
+    $('#code-input').value = bundle.code;
+    $('#source-name').value = bundle.sourceName;
+    $('#cases-input').value = bundle.caseInputs.join('\n\n');
+    document.querySelectorAll('.sample').forEach(b => b.classList.remove('selected'));
+    $('#bundle-info').innerHTML = `
+      <b>Archivos del proyecto</b>
+      <table>${bundle.files.map(f => `<tr><td class="mono">${esc(f.name)}</td><td>${esc(f.role)}</td>
+        <td>${f.included ? '<span class="chip ok">en el artefacto</span>' : f.role.includes('caso') ? '<span class="chip info">caso de prueba</span>' : '<span class="chip">ignorado</span>'}</td></tr>`).join('')}</table>
+      ${bundle.notes.length ? `<ul>${bundle.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}`;
+    $('#bundle-info').classList.remove('hidden');
+    toast(`Proyecto preparado: ${bundle.files.filter(f => f.included).length} archivos en el artefacto` +
+      (bundle.caseInputs.length ? ` y ${bundle.caseInputs.length} caso(s) de prueba del proyecto.` : '.'));
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 async function startJob() {

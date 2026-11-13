@@ -38,3 +38,6 @@ out/
 
 ### CodePhoenix ###
 workspace/
+
+# Secretos locales (docker compose los lee de .env)
+.env

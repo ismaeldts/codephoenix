@@ -16,7 +16,9 @@ necesita la variable `SPRING_AI_ANTHROPIC_API_KEY` definida (no hace llamadas).
 | `SecretMaskerTest` | Enmascaramiento de credenciales, cadenas de conexión, correos, tarjetas (Luhn) y asignaciones PL/SQL; conserva el número de líneas |
 | `CobolStaticAnalyzerTest` | Párrafos, GO TO, código muerto, complejidad, mapeo PIC/COMP-3 → BigDecimal, diseño del registro de entrada |
 | `PlsqlStaticAnalyzerTest` | Firma, esquema, tablas leídas/modificadas, código muerto, GOTO, tablas faltantes, llamadas externas, SYSDATE |
-| `PlsqlHarnessTest` | Formato de casos `PARAM`/`ROW`, validación contra firma y esquema, script de Oracle |
+| `PlsqlHarnessTest` | Formato de casos `CALL`/`PARAM`/`ROW`, validación contra firma y esquema, script de Oracle (reinicio de secuencias, orden por claves foráneas, normalización de USER/SYSDATE) |
+| `SqlInsertParserTest` | `INSERT` posicionales y con columnas, literales (`DATE`, `TO_DATE`, `NULL`), llamadas en bloques anónimos |
+| `ArtifactBundlerTest` | Un `.zip` desordenado se ordena en orden de compilación y sus datos de prueba se convierten en un caso |
 | `EquivalenceComparatorTest` | Comparación campo a campo, filas de tablas como conjunto, diferencias de centavos |
 | `RecordEncoderTest` | Codificación de registros de ancho fijo con decimales implícitos |
 | `SecurityAnalyzerTest` | Clasificación de hallazgos de SpotBugs/FindSecBugs y detección de dependencias de terceros |

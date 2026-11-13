@@ -87,6 +87,9 @@ code, pre, textarea, .mono { font-family: var(--mono); }
 .sample b { display: block; }
 .sample small { color: var(--muted); }
 .upload { display: block; margin: 8px 0 12px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.bundle { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; background: var(--surface-2); font-size: 13px; overflow-x: auto; }
+.bundle table { margin-top: 6px; }
+.bundle ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 .upload input { margin-right: 8px; }
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }

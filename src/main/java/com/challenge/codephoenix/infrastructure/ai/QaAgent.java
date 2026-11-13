@@ -14,9 +14,10 @@ public class QaAgent {
 	/**
 	 * Caso propuesto. Según el lenguaje se usa una forma u otra:
 	 * COBOL: {@code fields} (valores por campo del registro) o {@code input} literal;
-	 * PL/SQL: {@code params} (parámetros de entrada) y {@code fixtures} (filas por tabla).
+	 * PL/SQL: {@code routine} (rutina a invocar), {@code params} (parámetros de entrada) y
+	 * {@code fixtures} (filas por tabla).
 	 */
-	public record CaseDraft(String description, String kind, Map<String, String> fields, String input,
+	public record CaseDraft(String description, String kind, Map<String, String> fields, String input, String routine,
 			Map<String, String> params, Map<String, List<Map<String, String>>> fixtures, List<String> ruleIds) {
 	}
 
@@ -52,7 +53,7 @@ public class QaAgent {
 				- description: qué valida el caso, con los valores en formato legible (por ejemplo 100.000,00).
 				""".formatted(PromptSupport.rulesSpec(job.getAcceptedRules()), PromptSupport.numbered(job.getMaskedCode()),
 				formatInstructions);
-		return gateway.structured(job, "QA/Tester", AgentGateway.Profile.ESTANDAR, SYSTEM, user, TestPlan.class);
+		return gateway.structured(job, "QA/Tester", AgentGateway.Profile.CODIGO, SYSTEM, user, TestPlan.class);
 	}
 
 }

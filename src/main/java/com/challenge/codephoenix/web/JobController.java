@@ -26,6 +26,7 @@ import com.challenge.codephoenix.application.JobRepository;
 import com.challenge.codephoenix.application.MigrationOrchestrator;
 import com.challenge.codephoenix.domain.BusinessRule;
 import com.challenge.codephoenix.domain.MigrationJob;
+import com.challenge.codephoenix.infrastructure.platform.ArtifactBundler;
 import com.challenge.codephoenix.infrastructure.sandbox.DockerSandbox;
 import com.challenge.codephoenix.infrastructure.sandbox.OracleSandbox;
 
@@ -56,13 +57,15 @@ public class JobController {
 	private final JobRepository repository;
 	private final DockerSandbox sandbox;
 	private final OracleSandbox oracle;
+	private final ArtifactBundler bundler;
 
 	public JobController(MigrationOrchestrator orchestrator, JobRepository repository, DockerSandbox sandbox,
-			OracleSandbox oracle) {
+			OracleSandbox oracle, ArtifactBundler bundler) {
 		this.orchestrator = orchestrator;
 		this.repository = repository;
 		this.sandbox = sandbox;
 		this.oracle = oracle;
+		this.bundler = bundler;
 	}
 
 	@GetMapping("/status")
@@ -82,6 +85,18 @@ public class JobController {
 			.findFirst()
 			.orElseThrow(() -> new InvalidRequestException("No existe el ejemplo " + id));
 		return new ClassPathResource("samples/" + sample.fileName()).getContentAsString(StandardCharsets.UTF_8);
+	}
+
+	/** Prepara el artefacto a partir de un .zip o de varios archivos (no inicia la migración). */
+	@PostMapping(value = "/artifacts/bundle", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+	public ArtifactBundler.Bundle bundle(@org.springframework.web.bind.annotation.RequestParam("files")
+	List<org.springframework.web.multipart.MultipartFile> files) throws IOException {
+		List<ArtifactBundler.InputFile> inputs = new java.util.ArrayList<>();
+		for (org.springframework.web.multipart.MultipartFile file : files) {
+			inputs.add(new ArtifactBundler.InputFile(file.getOriginalFilename() == null ? "archivo" : file.getOriginalFilename(),
+					file.getBytes()));
+		}
+		return bundler.bundle(inputs);
 	}
 
 	@PostMapping("/jobs")

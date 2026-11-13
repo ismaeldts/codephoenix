@@ -65,7 +65,7 @@ public class DeveloperAgent {
 				""".formatted(job.getSpecVersion(), PromptSupport.rulesSpec(job.getAcceptedRules()),
 				job.getArchitecture().basePackage(), job.getArchitecture().summary(), elements(job),
 				PromptSupport.numbered(job.getMaskedCode()), goldenSamples, ioContract, job.getSourceName());
-		return PromptSupport.parseFiles(gateway.text(job, "Desarrollador", AgentGateway.Profile.PROFUNDO, system(job), user));
+		return PromptSupport.parseFiles(gateway.text(job, "Desarrollador", AgentGateway.Profile.CODIGO, system(job), user));
 	}
 
 	public Map<String, String> fix(MigrationJob job, Map<String, String> currentFiles, String problem,
@@ -90,7 +90,7 @@ public class DeveloperAgent {
 				Devuelve SOLO los archivos que cambian, cada uno COMPLETO, en el formato de bloques.
 				""".formatted(problem, ioContract, PromptSupport.rulesSpec(job.getAcceptedRules()),
 				PromptSupport.numbered(job.getMaskedCode()), PromptSupport.filesAsBlocks(currentFiles));
-		return PromptSupport.parseFiles(gateway.text(job, "Desarrollador (autocorrección)", AgentGateway.Profile.PROFUNDO, system(job), user));
+		return PromptSupport.parseFiles(gateway.text(job, "Desarrollador (autocorrección)", AgentGateway.Profile.CODIGO, system(job), user));
 	}
 
 	/**

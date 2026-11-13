@@ -24,6 +24,7 @@ COBOL / PL/SQL ──► enmascarar ──► análisis estático ──► regl
 
 ```bash
 export SPRING_AI_ANTHROPIC_API_KEY=sk-ant-...      # PowerShell: $env:SPRING_AI_ANTHROPIC_API_KEY = "sk-ant-..."
+# o, en cualquier terminal (cmd incluido): crea un archivo .env con SPRING_AI_ANTHROPIC_API_KEY=sk-ant-... (git lo ignora)
 docker compose up --build -d
 ```
 
@@ -46,7 +47,9 @@ los agentes y los quality gates son los mismos para todos.
 |---|---|---|
 | Análisis estático | Párrafos, PERFORM/GO TO, PIC/COMP-3 → BigDecimal, registro de entrada | Firma, unidades, DDL, tablas leídas y modificadas, `NUMBER(p,s)` → BigDecimal, funciones no deterministas |
 | Ejecución del original | GnuCOBOL en un contenedor sin red | Oracle Free en un contenedor caliente, en una red Docker interna (IP privada, sin salida a Internet); un esquema nuevo por ejecución |
-| Caso de prueba | Un registro de ancho fijo (lo codifica CodePhoenix a partir de valores por campo) | Parámetros de entrada + filas iniciales de las tablas (`PARAM|...`, `ROW|...`) |
+| Caso de prueba | Un registro de ancho fijo (lo codifica CodePhoenix a partir de valores por campo) | Rutina a invocar, parámetros de entrada y filas iniciales de las tablas (`CALL|...`, `PARAM|...`, `ROW|...`) |
+| Proyecto de varios archivos | — | Se suben varios `.sql` o un `.zip`: se ordenan solos (DDL → parámetros → especificación → cuerpo) y los datos de prueba del proyecto se convierten en un caso |
+| Reproducibilidad | — | Secuencias reiniciadas por caso; `USER` y `SYSDATE` normalizados a `USUARIO_BD` / `FECHA_SISTEMA` |
 | Qué se compara | Toda la salida (DISPLAY) | Parámetros de salida o error (`SQLCODE` y mensaje) **y** el estado final de las tablas modificadas |
 | Esquema faltante | — | Si el artefacto no trae el DDL, el Analista de datos lo infiere y queda marcado como supuesto |
 
