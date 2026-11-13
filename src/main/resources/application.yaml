@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: codephoenix
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 2MB
+  ai:
+    anthropic:
+      timeout: 10m
+      chat:
+        options:
+          model: claude-sonnet-5-5
+          max-tokens: 16000
+
+codephoenix:
+  workspace: ./workspace
+  sandbox:
+    image: codephoenix-sandbox:1
+    timeout: 5m
+  # Oracle Database Free para ejecutar PL/SQL. Red interna: IP privada, sin salida a Internet.
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    container: codephoenix-oracle
+    network: codephoenix-isolated
+    warm-up: true
+    startup-timeout: 5m
+    timeout: 5m
+  max-correction-attempts: 3
+  # Supuestos para comparar contra el proceso manual (informe ejecutivo).
+  manual-estimate:
+    loc-per-hour: 12
+    hourly-rate-usd: 45

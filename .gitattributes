@@ -1,0 +1,8 @@
+# Fin de línea LF en todo el repositorio: el COBOL de formato fijo, los scripts del sandbox
+# y los Dockerfile se ejecutan en Linux.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.jar binary
+*.png binary
+*.zip binary

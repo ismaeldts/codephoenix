@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CodePhoenix · Copiloto de Modernización</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" class="logo" aria-hidden="true"><path d="M16 2c2 5 8 7 8 14a8 8 0 0 1-16 0c0-3 1.5-5 3-6.5C11 12 12 14 14 15c-1-5 1-10 2-13z" fill="currentColor"/></svg>
+      <div>
+        <strong>CodePhoenix</strong>
+        <span>Copiloto de Modernización y Descubrimiento de Código Legacy</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span id="sandbox-chip" class="chip">Sandbox…</span>
+      <button id="new-job" class="btn ghost hidden">Nueva migración</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <section id="start-view" class="start">
+      <div class="start-hero">
+        <h1>De la caja negra legacy a código moderno <em>verificado</em></h1>
+        <p>Carga un programa COBOL o PL/SQL. Los agentes descubren sus reglas de negocio, tú las apruebas, y CodePhoenix
+          genera Java con arquitectura hexagonal cuya equivalencia se demuestra ejecutando el programa original en un
+          sandbox (GnuCOBOL u Oracle Database).</p>
+      </div>
+      <div class="start-grid">
+        <div class="card">
+          <h3>1 · Artefacto legacy</h3>
+          <div id="samples" class="samples"></div>
+          <label class="upload">
+            <input type="file" id="file-input" accept=".cbl,.cob,.cpy,.txt,.sql,.pls,.rpg,.rpgle">
+            <span>o carga un archivo desde tu equipo</span>
+          </label>
+          <div class="field">
+            <label for="source-name">Nombre del archivo</label>
+            <input id="source-name" placeholder="PROGRAMA.cbl">
+          </div>
+          <textarea id="code-input" spellcheck="false" placeholder="…o pega aquí el código fuente"></textarea>
+        </div>
+        <div class="card">
+          <h3>2 · Contexto de la migración</h3>
+          <div class="field">
+            <label for="domain-input">Dominio funcional</label>
+            <input id="domain-input" value="Créditos de consumo — amortización francesa">
+          </div>
+          <div class="field">
+            <label for="stack-input">Stack destino</label>
+            <select id="stack-input">
+              <option value="Java 21">Java 21 · arquitectura hexagonal (sin dependencias externas)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cases-input">Casos de prueba propios (opcional)</label>
+            <textarea id="cases-input" class="small" spellcheck="false" placeholder="COBOL: un registro por línea, p. ej. 000100000000180000012700&#10;PL/SQL: líneas PARAM|nombre|valor y ROW|TABLA|COL=valor|...; separa cada caso con una línea en blanco"></textarea>
+          </div>
+          <div class="guarantees">
+            <div><b>🔒</b> Los secretos y datos personales se enmascaran antes de enviarse a la IA</div>
+            <div><b>👤</b> Ninguna regla llega al código sin tu aprobación</div>
+            <div><b>⚖️</b> La equivalencia se demuestra ejecutando el programa original: GnuCOBOL u Oracle, sin Internet</div>
+          </div>
+          <button id="start-btn" class="btn primary wide">Iniciar modernización</button>
+          <p id="start-error" class="error hidden"></p>
+        </div>
+      </div>
+      <div id="history" class="card hidden" style="margin-top:16px">
+        <h3>Migraciones anteriores</h3>
+        <p class="muted">Se guardan en disco: puedes reabrirlas sin conexión, por ejemplo como respaldo durante una demo.</p>
+        <table id="history-table"></table>
+      </div>
+    </section>
+
+    <section id="job-view" class="job hidden">
+      <aside class="stepper" id="stepper"></aside>
+      <div class="workspace">
+        <div class="job-header" id="job-header"></div>
+        <nav class="tabs" id="tabs"></nav>
+        <div class="tab-body" id="tab-body"></div>
+      </div>
+      <aside class="activity">
+        <h4>Actividad de los agentes</h4>
+        <ol id="events"></ol>
+      </aside>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
