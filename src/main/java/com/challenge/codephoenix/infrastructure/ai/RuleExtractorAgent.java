@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.stereotype.Component;
 
+import com.challenge.codephoenix.domain.DecisionTable;
 import com.challenge.codephoenix.domain.MigrationJob;
 
 /** Descubre y formaliza las reglas de negocio con trazabilidad a las líneas de origen. */
@@ -15,7 +16,8 @@ public class RuleExtractorAgent {
 			double confidence, List<String> assumptions) {
 	}
 
-	public record RuleExtraction(String summary, List<RuleDraft> rules, List<String> infrastructureLogic) {
+	public record RuleExtraction(String summary, List<RuleDraft> rules, List<String> infrastructureLogic,
+			List<DecisionTable> decisionTables) {
 	}
 
 	private static final String SYSTEM = """
@@ -67,6 +69,11 @@ public class RuleExtractorAgent {
 				  de ejemplo concretos.
 				- sourceStartLine / sourceEndLine: líneas exactas; sourceParagraph: nombre del %s que la contiene.
 				- assumptions: máximo 2 supuestos o ambigüedades, una frase cada uno (lista vacía si no hay).
+				En decisionTables expresa como tabla de decisión (entre 1 y 3 tablas) las políticas donde varias reglas
+				combinan condiciones (tramos, tipos de producto, estados, topes). Cada tabla: name, ruleIds que resume,
+				conditions (encabezados de las columnas de condición), actions (encabezados de las columnas de acción) y
+				rows (cada fila con un valor por condición —usa "-" cuando no aplica— y un valor por acción). Las filas
+				deben ser exhaustivas y mutuamente excluyentes, en el orden en que el código las evalúa.
 				En summary resume en 2 frases qué regula el programa.
 				En infrastructureLogic lista la lógica de plataforma que NO es negocio (una frase por elemento, con líneas).
 				""".formatted(knowledge.retrieve(knowledge.topicsFor(job.getLanguage())), job.getDomainName(),

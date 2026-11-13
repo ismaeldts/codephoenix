@@ -10,21 +10,25 @@ COBOL / PL/SQL ──► enmascarar ──► análisis estático ──► regl
       paquete .zip ◄── documentación ◄── pruebas + cobertura ◄── equivalencia ◄── código Java ◄── arquitectura
 ```
 
-## Requisitos
+## Documentación
 
-| Herramienta | Uso |
+| Documento | Para quién |
 |---|---|
-| JDK 21 | Ejecutar CodePhoenix |
-| Docker Desktop | Sandboxes donde se ejecutan el programa original y el Java generado |
-| `SPRING_AI_ANTHROPIC_API_KEY` | Clave de la API de Anthropic (variable de entorno) |
+| [Resumen ejecutivo](docs/01-resumen-ejecutivo.md) | Negocio, dirección, jurado |
+| [Arquitectura técnica](docs/02-arquitectura-tecnica.md) | Desarrolladores y arquitectos (con diagramas) |
+| [Guía de pruebas](docs/03-guia-de-pruebas.md) | QA y evaluadores: qué probar y qué esperar |
+| [Instalación y herramientas](docs/04-instalacion-y-herramientas.md) | Quien despliega; solución de problemas |
+| [Guion de demo](docs/05-guion-de-demo.md) | Presentadores |
 
-## Puesta en marcha
+## Puesta en marcha con un solo comando
 
-```powershell
-docker build -t codephoenix-sandbox:1 sandbox            # una sola vez: GnuCOBOL + JDK 21 + JUnit + JaCoCo
-docker pull gvenzl/oracle-free:23-slim-faststart         # una sola vez, solo para PL/SQL (~6 GB)
-.\gradlew.bat bootRun
+```bash
+export SPRING_AI_ANTHROPIC_API_KEY=sk-ant-...      # PowerShell: $env:SPRING_AI_ANTHROPIC_API_KEY = "sk-ant-..."
+docker compose up --build -d
 ```
+
+Necesita Docker Desktop. La primera vez construye la aplicación y el sandbox y descarga Oracle (~6 GB).
+Modo desarrollo (sin contenerizar la aplicación): ver [Instalación](docs/04-instalacion-y-herramientas.md).
 
 Abre <http://localhost:8080>, elige un ejemplo y pulsa **Iniciar modernización**:
 
@@ -55,11 +59,11 @@ reutiliza (`docker rm -f codephoenix-oracle` lo elimina).
 |---|---|---|
 | 1. Ingesta | Detecta el lenguaje, enmascara secretos y datos personales, verifica que el artefacto es ejecutable | 0 secretos residuales hacia la IA |
 | 2. Análisis estático | Parser determinista: unidades, grafo de llamadas, código muerto, complejidad, mapeo de tipos a Java, mapa de riesgo; en PL/SQL crea el esquema y compila en Oracle | 100% de dependencias resueltas; el original compila |
-| 3. Reglas de negocio | Agente Extractor: reglas condición/acción, Gherkin, líneas de origen y nivel de confianza | Todas las reglas trazadas a líneas válidas |
+| 3. Reglas de negocio | Agente Extractor: reglas condición/acción, tablas de decisión, Gherkin, líneas de origen y nivel de confianza | Todas las reglas trazadas a líneas válidas |
 | 4. Validación humana | El ingeniero aprueba, ajusta o rechaza cada regla; la especificación se versiona | Aprobación explícita |
 | 5. Arquitectura | Agente Arquitecto: DDD + hexagonal, ADRs, OpenAPI, diagrama | Dominio, puertos, adaptadores y ADRs |
-| 6. Generación | Agente QA diseña casos y se captura el **Golden Master del programa original**; Agente Desarrollador genera Java y se autocorrige con los errores del compilador y del análisis estático | Compila; 0 hallazgos bloqueantes o críticos |
-| 7. Verificación | Equivalencia caso por caso contra el original (con autocorrección), pruebas JUnit 5 + JaCoCo | 100% equivalencia, cobertura ≥ 80% / 70%, complejidad ≤ 10 |
+| 6. Generación | Agente QA diseña casos y se captura el **Golden Master del programa original**; Agente Desarrollador genera Java y se autocorrige con los errores del compilador, del análisis estático y del SAST | Compila; 0 hallazgos bloqueantes o críticos (calidad y seguridad) |
+| 7. Verificación | Equivalencia caso por caso contra el original (con autocorrección), pruebas JUnit 5 + JaCoCo, escenarios Gherkin ejecutables (Cucumber), SAST final (SpotBugs + FindSecBugs) | 100% equivalencia, pruebas y escenarios; cobertura ≥ 80% / 70%; complejidad ≤ 10; 0 vulnerabilidades críticas |
 | 8. Entrega | Agente Documentador + empaquetado: código, pruebas, reglas, trazabilidad, ADRs, reportes, Dockerfile, informe ejecutivo | Paquete ejecutable con un solo comando |
 
 ## Arquitectura de CodePhoenix
@@ -70,21 +74,15 @@ reutiliza (`docker rm -f codephoenix-oracle` lo elimina).
 | Orquestación multiagente | `application` | `MigrationOrchestrator` con estado, quality gates y pausa para aprobación humana |
 | Agentes | `infrastructure.ai` | Analista, Extractor de reglas, Arquitecto, QA/Tester, Desarrollador y Documentador |
 | Conocimiento (RAG) | `resources/knowledge` | Semántica COBOL → Java, estándares de código y glosario bancario |
-| Análisis estático | `infrastructure.analysis` | Parser COBOL, enmascarador de secretos, analizador de calidad Java |
-| Verificación | `infrastructure.sandbox` | Contenedor efímero sin red: GnuCOBOL, JDK 21, JUnit 5, JaCoCo |
+| Análisis estático | `infrastructure.analysis` | Parsers COBOL y PL/SQL, enmascarador de secretos, calidad Java, SAST |
+| Verificación | `infrastructure.sandbox` | Sandbox efímero sin red (GnuCOBOL, JDK 21, JUnit 5, JaCoCo, SpotBugs, Cucumber) y Oracle en red interna |
 | Gobierno | `AgentGateway` | Bitácora de cada llamada a la IA: hash del prompt, tokens, duración, resultado |
 
-## Guion de demo (10 minutos)
+Detalle, diagramas y contratos en [Arquitectura técnica](docs/02-arquitectura-tecnica.md).
 
-1. **El problema (1 min).** Abre `AMORTIZA.cbl`: 25 años de parches, GO TO, COMP-3 y una credencial en un comentario.
-2. **Ingesta y análisis (1 min).** Pestaña *Seguridad*: la credencial ya está enmascarada. Pestaña *Análisis*: grafo
-   de llamadas con el código muerto en rojo y el mapeo exacto de tipos.
-3. **Reglas (2 min).** Pestaña *Reglas*: cada regla junto a sus líneas COBOL. Muestra una regla tácita (truncamiento
-   en cada iteración del factor). Ajusta o rechaza una regla y aprueba la especificación.
-4. **Generación y verificación (3 min).** Sigue las fases 5 a 7 en la barra lateral. Muestra *Legacy vs. moderno*
-   y la tabla de equivalencia: cada caso se ejecutó en el COBOL real.
-5. **Entrega (2 min).** Tablero con las métricas, informe ejecutivo y descarga del paquete.
-6. **Cierre (1 min).** Comparación del tiempo del copiloto frente a la estimación manual.
+## Demo
+
+Guion de 10 minutos con lo que hay que mostrar y decir en cada paso: [Guion de demo](docs/05-guion-de-demo.md).
 
 **Plan de contingencia:** cada migración se guarda en `workspace/jobs/<id>/job.json` y sobrevive a los reinicios.
 Antes de la demo, ejecuta una migración completa: si falla la conectividad, ábrela desde *Migraciones anteriores* en la

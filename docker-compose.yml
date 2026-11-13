@@ -1,0 +1,43 @@
+# CodePhoenix con un solo comando:
+#   SPRING_AI_ANTHROPIC_API_KEY=... docker compose up --build
+# y abre http://localhost:8080
+#
+# La primera vez construye la aplicación y el sandbox, y descarga Oracle Database Free (~6 GB).
+name: codephoenix
+
+services:
+  app:
+    build: .
+    image: codephoenix-app:1
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_AI_ANTHROPIC_API_KEY: ${SPRING_AI_ANTHROPIC_API_KEY:?Define la variable SPRING_AI_ANTHROPIC_API_KEY}
+      CODEPHOENIX_WORKSPACE: /workspace
+      CODEPHOENIX_SANDBOX_VOLUME: codephoenix-workspace
+    volumes:
+      - workspace:/workspace
+      # La aplicación lanza los sandboxes (contenedores hermanos) a través del Docker del host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      sandbox-image:
+        condition: service_completed_successfully
+      oracle-image:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Solo construye la imagen del sandbox (GnuCOBOL, JDK 21, JUnit, JaCoCo, SpotBugs, Cucumber) y termina.
+  sandbox-image:
+    build: ./sandbox
+    image: codephoenix-sandbox:2
+    entrypoint: ["true"]
+
+  # Solo descarga la imagen de Oracle Database Free y termina; la aplicación crea el contenedor
+  # en una red interna sin salida a Internet cuando la necesita.
+  oracle-image:
+    image: gvenzl/oracle-free:23-slim-faststart
+    entrypoint: ["true"]
+
+volumes:
+  workspace:
+    name: codephoenix-workspace

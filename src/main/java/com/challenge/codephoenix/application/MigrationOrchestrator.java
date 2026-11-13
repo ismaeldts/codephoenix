@@ -13,6 +13,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Service;
 
 import com.challenge.codephoenix.config.CodephoenixProperties;
 import com.challenge.codephoenix.domain.ArchitectureDesign;
+import com.challenge.codephoenix.domain.BddReport;
 import com.challenge.codephoenix.domain.BusinessRule;
 import com.challenge.codephoenix.domain.CaseResult;
 import com.challenge.codephoenix.domain.EquivalenceReport;
@@ -29,6 +32,7 @@ import com.challenge.codephoenix.domain.MigrationJob;
 import com.challenge.codephoenix.domain.Phase;
 import com.challenge.codephoenix.domain.PhaseState;
 import com.challenge.codephoenix.domain.QualityReport;
+import com.challenge.codephoenix.domain.SecurityReport;
 import com.challenge.codephoenix.domain.StaticAnalysis;
 import com.challenge.codephoenix.domain.TestCase;
 import com.challenge.codephoenix.domain.TestRunReport;
@@ -42,6 +46,7 @@ import com.challenge.codephoenix.infrastructure.ai.RuleExtractorAgent;
 import com.challenge.codephoenix.infrastructure.analysis.JavaQualityAnalyzer;
 import com.challenge.codephoenix.infrastructure.analysis.LanguageDetector;
 import com.challenge.codephoenix.infrastructure.analysis.SecretMasker;
+import com.challenge.codephoenix.infrastructure.analysis.SecurityAnalyzer;
 import com.challenge.codephoenix.infrastructure.packaging.MigrationPackager;
 import com.challenge.codephoenix.infrastructure.packaging.TraceabilityMatrix;
 import com.challenge.codephoenix.infrastructure.sandbox.DockerSandbox;
@@ -77,13 +82,15 @@ public class MigrationOrchestrator {
 	private final DocumentationAgent documenter;
 	private final MigrationPackager packager;
 	private final TraceabilityMatrix traceability;
+	private final SecurityAnalyzer securityAnalyzer;
 	private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
 	public MigrationOrchestrator(JobRepository repository, CodephoenixProperties properties, SecretMasker masker,
 			LanguageDetector languageDetector, List<LegacyPlatform> platforms, JavaQualityAnalyzer qualityAnalyzer,
 			DockerSandbox sandbox, ExecutionService execution, AnalystAgent analyst, RuleExtractorAgent ruleExtractor,
 			ArchitectAgent architect, QaAgent qa, DeveloperAgent developer, DocumentationAgent documenter,
-			MigrationPackager packager, TraceabilityMatrix traceability) {
+			MigrationPackager packager, TraceabilityMatrix traceability, SecurityAnalyzer securityAnalyzer) {
+		this.securityAnalyzer = securityAnalyzer;
 		this.repository = repository;
 		this.properties = properties;
 		this.masker = masker;
@@ -280,10 +287,14 @@ public class MigrationOrchestrator {
 			rules.add(new BusinessRule(id, d.name(), d.category(), d.description(), d.condition(), d.action(),
 					d.gherkin(), d.sourceStartLine(), d.sourceEndLine(), d.sourceParagraph(), confidence, assumptions));
 		}
+		job.decisionTablesExtracted(extraction.decisionTables() == null ? List.of() : extraction.decisionTables().stream()
+			.filter(t -> t.rows() != null && !t.rows().isEmpty() && t.conditions() != null && t.actions() != null)
+			.toList());
 		job.rulesExtracted(extraction.summary(), rules,
 				extraction.infrastructureLogic() == null ? List.of() : extraction.infrastructureLogic());
 		long lowConfidence = rules.stream().filter(r -> r.getConfidence() < 0.8).count();
-		pass(job, phase, invalid == 0, rules.size() + " reglas, " + (rules.size() - invalid)
+		pass(job, phase, invalid == 0, rules.size() + " reglas y " + job.getDecisionTables().size()
+				+ " tablas de decisión; " + (rules.size() - invalid)
 				+ " con trazabilidad válida a líneas de origen; " + lowConfidence + " con confianza < 80% requieren atención");
 		job.phase(Phase.VALIDACION).start("Esperando la revisión del ingeniero");
 		job.phase(Phase.VALIDACION).awaitApproval("Revisa cada regla: aprobar, ajustar o rechazar");
@@ -359,17 +370,22 @@ public class MigrationOrchestrator {
 			}
 			else {
 				QualityReport quality = qualityAnalyzer.analyze(job.getGeneratedFiles());
-				List<QualityReport.Finding> severe = quality.findings()
-					.stream()
+				phase.progress("Análisis de seguridad SAST (SpotBugs + FindSecBugs) en el sandbox (intento " + attempt + ")");
+				SecurityReport security = securityScan(job, dir);
+				List<QualityReport.Finding> severe = Stream.concat(quality.findings().stream(), security.findings().stream())
 					.filter(f -> f.severity().equals("BLOQUEANTE") || f.severity().equals("CRITICO"))
 					.toList();
-				if (severe.isEmpty()) {
+				if (severe.isEmpty() && security.executed()) {
 					job.tested(null, quality);
 					pass(job, phase, true, "Compilación exitosa en el intento " + attempt + "; "
-							+ quality.filesAnalyzed() + " archivos, 0 hallazgos bloqueantes o críticos");
+							+ quality.filesAnalyzed() + " archivos, 0 hallazgos bloqueantes o críticos (calidad y SAST)");
 					return new Characterization(golden, modern.outputs());
 				}
-				problem = "HALLAZGOS CRÍTICOS DEL ANÁLISIS ESTÁTICO:\n" + severe.stream()
+				if (!security.executed()) {
+					throw new GateFailedException(Phase.GENERACION, "El análisis SAST no se pudo ejecutar:\n"
+							+ tail(security.output(), 1500));
+				}
+				problem = "HALLAZGOS CRÍTICOS DEL ANÁLISIS ESTÁTICO Y DE SEGURIDAD:\n" + severe.stream()
 					.map(f -> "- [" + f.severity() + "] " + f.file() + ":" + f.line() + " " + f.message())
 					.collect(Collectors.joining("\n"));
 				job.log(Phase.GENERACION, "WARN", "Intento " + attempt + ": " + severe.size() + " hallazgos críticos");
@@ -420,33 +436,65 @@ public class MigrationOrchestrator {
 			modern = rerun.ok() ? rerun.outputs() : Map.of();
 		}
 
-		phase.progress("El Agente QA genera la suite de pruebas unitarias por lotes");
-		generateTestsInBatches(job, goldenSamples(cases, golden, 10));
+		phase.progress("El Agente QA genera las pruebas unitarias y los escenarios BDD ejecutables");
+		String samples = goldenSamples(cases, golden, 10);
+		String glue = job.getArchitecture().basePackage() + ".bdd";
+		var bddFuture = executor.submit(() -> developer.generateBdd(job, mainFiles(job), samples, glue));
+		generateTestsInBatches(job, samples);
+		applyFiles(job, await(bddFuture));
+
 		TestRunReport tests = null;
+		BddReport bdd = null;
 		for (int attempt = 0; attempt <= MAX_TEST_FIX_ATTEMPTS; attempt++) {
-			phase.progress("Ejecutando JUnit 5 + JaCoCo en el sandbox" + (attempt > 0 ? " (corrección " + attempt + ")" : ""));
+			phase.progress("Ejecutando JUnit 5 + JaCoCo y Cucumber en el sandbox" + (attempt > 0 ? " (corrección " + attempt + ")" : ""));
 			tests = execution.runUnitTests(dir);
-			String problem = testProblem(tests);
-			if (problem == null) {
+			bdd = tests.compiled() ? bddReport(job, execution.runBdd(dir, glue)) : null;
+			String testProblem = testProblem(tests);
+			String bddProblem = tests.compiled() ? bddProblem(bdd) : null;
+			if (testProblem == null && bddProblem == null) {
 				break;
 			}
-			job.log(Phase.VERIFICACION, "WARN", "Pruebas: " + problem.lines().findFirst().orElse(""));
+			if (testProblem != null) {
+				job.log(Phase.VERIFICACION, "WARN", "Pruebas: " + testProblem.lines().findFirst().orElse(""));
+			}
+			if (bddProblem != null) {
+				job.log(Phase.VERIFICACION, "WARN", "BDD: " + bddProblem.lines().findFirst().orElse(""));
+			}
 			if (attempt == MAX_TEST_FIX_ATTEMPTS) {
 				break;
 			}
-			applyFiles(job, onlySources(developer.fixTests(job, job.getGeneratedFiles(), problem)));
+			if (testProblem != null) {
+				applyFiles(job, onlySources(developer.fixTests(job, job.getGeneratedFiles(), testProblem)));
+			}
+			if (bddProblem != null) {
+				applyFiles(job, developer.fixBdd(job, job.getGeneratedFiles(), bddProblem, glue));
+			}
 		}
+		job.bddVerified(bdd);
+
+		phase.progress("Análisis final de calidad y seguridad (SAST)");
 		QualityReport quality = qualityAnalyzer.analyze(job.getGeneratedFiles());
+		SecurityReport security = securityScan(job, dir);
 		job.tested(tests, quality);
 		job.log(Phase.VERIFICACION, "INFO", tests.succeeded() + "/" + tests.testsFound() + " pruebas exitosas; cobertura "
 				+ tests.lineCoverage() + "% líneas / " + tests.branchCoverage() + "% ramas");
+		if (bdd != null) {
+			job.log(Phase.VERIFICACION, bdd.allPassed() ? "OK" : "WARN", "BDD: " + bdd.passed() + "/" + bdd.scenarios()
+					+ " escenarios Gherkin aprobados; " + bdd.coveredRules().size() + " reglas cubiertas");
+		}
+		job.log(Phase.VERIFICACION, security.critical() == 0 ? "OK" : "WARN", "SAST: " + security.critical()
+				+ " críticos, " + security.major() + " mayores, " + security.minor() + " menores; dependencias de producción: "
+				+ (security.productionDependencies().isEmpty() ? "ninguna" : security.productionDependencies()));
 
-		boolean ok = job.getEquivalence().allPassed() && testProblem(tests) == null && quality.blockers() == 0
+		boolean ok = job.getEquivalence().allPassed() && testProblem(tests) == null && bdd != null
+				&& bddProblem(bdd) == null && security.executed() && security.critical() == 0 && quality.blockers() == 0
 				&& quality.criticals() == 0 && quality.maxMethodComplexity() <= JavaQualityAnalyzer.MAX_METHOD_COMPLEXITY;
 		String summary = "Equivalencia " + job.getEquivalence().passed() + "/" + job.getEquivalence().total()
-				+ "; pruebas " + tests.succeeded() + "/" + tests.testsFound() + "; cobertura " + tests.lineCoverage()
-				+ "% líneas / " + tests.branchCoverage() + "% ramas; complejidad máx. " + quality.maxMethodComplexity()
-				+ "; " + quality.blockers() + " bloqueantes, " + quality.criticals() + " críticos";
+				+ "; pruebas " + tests.succeeded() + "/" + tests.testsFound() + "; BDD "
+				+ (bdd == null ? "no ejecutado" : bdd.passed() + "/" + bdd.scenarios() + " escenarios") + "; cobertura "
+				+ tests.lineCoverage() + "% líneas / " + tests.branchCoverage() + "% ramas; complejidad máx. "
+				+ quality.maxMethodComplexity() + "; " + quality.blockers() + " bloqueantes, " + quality.criticals()
+				+ " críticos; SAST " + security.critical() + " vulnerabilidades críticas";
 		if (!ok) {
 			throw new GateFailedException(Phase.VERIFICACION, summary);
 		}
@@ -614,11 +662,74 @@ public class MigrationOrchestrator {
 	private static Map<String, String> onlySources(Map<String, String> files) {
 		Map<String, String> result = new LinkedHashMap<>();
 		files.forEach((path, content) -> {
-			if ((path.startsWith("src/main/java/") || path.startsWith("src/test/java/")) && path.endsWith(".java")) {
+			boolean java = (path.startsWith("src/main/java/") || path.startsWith("src/test/java/")) && path.endsWith(".java");
+			boolean feature = path.startsWith(DeveloperAgent.FEATURES_DIR) && path.endsWith(".feature");
+			if (java || feature) {
 				result.put(path, content);
 			}
 		});
 		return result;
+	}
+
+	/** SAST del código compilado; la evidencia queda en la migración. */
+	private SecurityReport securityScan(MigrationJob job, Path dir) throws IOException, InterruptedException {
+		ExecutionService.ToolRun run = execution.runSecurityScan(dir);
+		SecurityReport report = run.ok()
+				? securityAnalyzer.fromSpotBugs(run.report(), job.getGeneratedFiles(), job.getArchitecture().basePackage(),
+						tail(run.output(), 3000))
+				: new SecurityReport(SecurityAnalyzer.TOOL, false, 0, 0, 0, List.of(), List.of(), tail(run.output(), 3000));
+		job.secured(report);
+		return report;
+	}
+
+	private static final Pattern RULE_TAG = Pattern.compile("@(R-\\d{2,3})\\b");
+
+	/** Resultado de Cucumber más la cobertura de reglas aprobadas por etiquetas @R-xx en los .feature. */
+	private static BddReport bddReport(MigrationJob job, TestRunReport run) {
+		Set<String> tagged = new LinkedHashSet<>();
+		job.getGeneratedFiles().forEach((path, content) -> {
+			if (path.startsWith(DeveloperAgent.FEATURES_DIR)) {
+				Matcher m = RULE_TAG.matcher(content);
+				while (m.find()) {
+					tagged.add(m.group(1));
+				}
+			}
+		});
+		List<String> accepted = job.getAcceptedRules().stream().map(BusinessRule::getId).toList();
+		List<String> covered = accepted.stream().filter(tagged::contains).toList();
+		List<String> uncovered = accepted.stream().filter(id -> !tagged.contains(id)).toList();
+		return new BddReport(run.compiled(), run.testsFound(), run.succeeded(), run.failed(), covered, uncovered,
+				tail(run.output(), 4000));
+	}
+
+	private static String bddProblem(BddReport bdd) {
+		if (bdd == null || !bdd.executed()) {
+			return "Los escenarios BDD no se pudieron ejecutar:\n" + (bdd == null ? "" : bdd.output());
+		}
+		if (bdd.scenarios() == 0) {
+			return "Cucumber no encontró escenarios: revisa la carpeta " + DeveloperAgent.FEATURES_DIR
+					+ ", la cabecera '# language: es' y el paquete de los pasos.\n" + bdd.output();
+		}
+		if (bdd.failed() > 0 || bdd.passed() < bdd.scenarios()) {
+			return (bdd.scenarios() - bdd.passed()) + " escenarios BDD fallan o tienen pasos sin definir:\n" + bdd.output();
+		}
+		if (!bdd.uncoveredRules().isEmpty()) {
+			return "Faltan escenarios etiquetados para las reglas: " + String.join(", ", bdd.uncoveredRules());
+		}
+		return null;
+	}
+
+	private static <T> T await(java.util.concurrent.Future<T> future) {
+		try {
+			return future.get();
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException(ex);
+		}
+		catch (java.util.concurrent.ExecutionException ex) {
+			throw ex.getCause() instanceof RuntimeException runtime ? runtime : new IllegalStateException(ex.getCause());
+		}
 	}
 
 	private static Map<String, String> mainFiles(MigrationJob job) {

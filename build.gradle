@@ -40,6 +40,11 @@ dependencyManagement {
 	}
 }
 
+// Solo el jar ejecutable de Spring Boot (lo copia el Dockerfile).
+tasks.named('jar') {
+	enabled = false
+}
+
 tasks.named('test') {
 	useJUnitPlatform()
 }

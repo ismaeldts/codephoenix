@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.format.DateTimeFormatter;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -17,6 +18,9 @@ import org.springframework.stereotype.Component;
 
 import com.challenge.codephoenix.application.LegacyPlatform;
 import com.challenge.codephoenix.domain.ArchitectureDesign;
+import com.challenge.codephoenix.domain.BddReport;
+import com.challenge.codephoenix.domain.DecisionTable;
+import com.challenge.codephoenix.domain.SecurityReport;
 import com.challenge.codephoenix.domain.BusinessRule;
 import com.challenge.codephoenix.domain.CaseResult;
 import com.challenge.codephoenix.domain.MigrationJob;
@@ -47,9 +51,12 @@ public class MigrationPackager {
 			write(root.resolve(file.getKey()), file.getValue());
 		}
 		write(root.resolve("legacy").resolve(job.getSourceName()), job.getMaskedCode());
-		write(root.resolve("Dockerfile"), dockerfile(mainClass));
+		String projectName = "migracion-" + job.getAnalysis().programId().toLowerCase().replaceAll("[^a-z0-9]+", "-");
+		String glue = job.getArchitecture().basePackage() + ".bdd";
+		write(root.resolve("Dockerfile"), dockerfile(projectName));
 		write(root.resolve("build.gradle"), buildGradle(mainClass));
-		write(root.resolve("settings.gradle"), "rootProject.name = 'migracion-" + job.getAnalysis().programId().toLowerCase() + "'\n");
+		write(root.resolve("settings.gradle"), "rootProject.name = '" + projectName + "'\n");
+		write(root.resolve("src/test/java/" + glue.replace('.', '/') + "/RunCucumberTest.java"), cucumberRunner(glue));
 		write(root.resolve("README.md"), readme(job, mainClass, platform));
 		if (job.getLegacySchema() != null) {
 			write(root.resolve("legacy/ESQUEMA.sql"), job.getLegacySchema() + "\n");
@@ -76,7 +83,8 @@ public class MigrationPackager {
 		}
 		write(root.resolve("reports/EQUIVALENCIA.md"), equivalenceDoc(job, platform));
 		write(root.resolve("reports/CALIDAD.md"), qualityDoc(job.getQuality()));
-		write(root.resolve("reports/PRUEBAS.md"), testsDoc(job.getTestRun()));
+		write(root.resolve("reports/PRUEBAS.md"), testsDoc(job.getTestRun(), job.getBdd()));
+		write(root.resolve("reports/SEGURIDAD.md"), securityDoc(job));
 		write(root.resolve("reports/AUDITORIA_IA.md"), auditDoc(job));
 		copyDirectory(jobDir.resolve("reports/coverage-html"), root.resolve("reports/cobertura-html"));
 		for (CaseResult result : job.getEquivalence().cases()) {
@@ -90,24 +98,42 @@ public class MigrationPackager {
 		return zip;
 	}
 
-	private static String dockerfile(String mainClass) {
+	private static String dockerfile(String projectName) {
 		return """
-				# Compila, ejecuta la suite de pruebas (la construcción falla si una prueba falla) y deja lista
-				# la aplicación. Uso: docker build -t migracion . && echo "<registro>" | docker run -i --rm migracion
-				FROM eclipse-temurin:21-jdk AS build
-				ADD https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.11.4/junit-platform-console-standalone-1.11.4.jar /opt/junit.jar
+				# Compila, ejecuta las pruebas unitarias y los escenarios Gherkin (la construcción falla si alguno
+				# falla) y deja lista la aplicación.
+				FROM gradle:8.14-jdk21 AS build
 				WORKDIR /app
+				COPY settings.gradle build.gradle ./
 				COPY src ./src
-				RUN find src/main/java -name '*.java' > main.txt && javac -encoding UTF-8 -d classes @main.txt \\
-				 && find src/test/java -name '*.java' > test.txt \\
-				 && javac -encoding UTF-8 -cp classes:/opt/junit.jar -d test-classes @test.txt \\
-				 && java -jar /opt/junit.jar execute --disable-banner --details=summary \\
-				    --class-path test-classes:classes --scan-class-path --fail-if-no-tests
+				RUN gradle --no-daemon -q test installDist
 
 				FROM eclipse-temurin:21-jre
-				COPY --from=build /app/classes /app/classes
-				ENTRYPOINT ["java", "-cp", "/app/classes", "%s"]
-				""".formatted(mainClass);
+				COPY --from=build /app/build/install/%s /app
+				ENTRYPOINT ["/app/bin/%s"]
+				""".formatted(projectName, projectName);
+	}
+
+	/** Lanzador JUnit Platform de los escenarios Gherkin, para ejecutarlos con `gradle test`. */
+	private static String cucumberRunner(String gluePackage) {
+		return """
+				package %s;
+
+				import static io.cucumber.junit.platform.engine.Constants.GLUE_PROPERTY_NAME;
+
+				import org.junit.platform.suite.api.ConfigurationParameter;
+				import org.junit.platform.suite.api.IncludeEngines;
+				import org.junit.platform.suite.api.SelectClasspathResource;
+				import org.junit.platform.suite.api.Suite;
+
+				/** Ejecuta los escenarios de src/test/resources/features con Cucumber. */
+				@Suite
+				@IncludeEngines("cucumber")
+				@SelectClasspathResource("features")
+				@ConfigurationParameter(key = GLUE_PROPERTY_NAME, value = "%s")
+				public class RunCucumberTest {
+				}
+				""".formatted(gluePackage, gluePackage);
 	}
 
 	private static String buildGradle(String mainClass) {
@@ -129,6 +155,9 @@ public class MigrationPackager {
 				dependencies {
 					testImplementation platform('org.junit:junit-bom:5.11.4')
 					testImplementation 'org.junit.jupiter:junit-jupiter'
+					testImplementation 'org.junit.platform:junit-platform-suite'
+					testImplementation 'io.cucumber:cucumber-java:7.20.1'
+					testImplementation 'io.cucumber:cucumber-junit-platform-engine:7.20.1'
 					testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 				}
 
@@ -153,8 +182,10 @@ public class MigrationPackager {
 				| Reglas de negocio aprobadas | %d (especificación v%d) |
 				| Equivalencia legacy vs. moderno | %d/%d casos idénticos |
 				| Pruebas unitarias | %d/%d exitosas |
+				| Escenarios BDD (Gherkin ejecutable) | %s |
 				| Cobertura | %.1f%% líneas / %.1f%% ramas |
 				| Hallazgos bloqueantes / críticos | %d / %d |
+				| Vulnerabilidades críticas (SAST) | %s |
 
 				## Ejecutar con un solo comando
 
@@ -162,30 +193,35 @@ public class MigrationPackager {
 				%s
 				```
 
-				La construcción de la imagen compila el código y ejecuta toda la suite de pruebas; si alguna prueba
-				falla, la imagen no se construye. Alternativa sin Docker: `gradle test run`.
+				La construcción de la imagen compila el código y ejecuta las pruebas unitarias y los escenarios
+				Gherkin; si alguno falla, la imagen no se construye. Alternativa sin Docker: `gradle test run`.
 
 				> En Windows usa Git Bash o `cmd`: Windows PowerShell 5.1 antepone una marca BOM al texto que
-				> envía por tubería y el registro llega con un carácter extra (igual que le ocurriría al COBOL).
+				> envía por tubería y la entrada llega con un carácter extra (igual que le ocurriría al original).
 
-				Clase de entrada: `%s` (lee un registro con el formato del programa legacy y produce la misma salida).
+				Clase de entrada: `%s` (lee la entrada con el formato del programa legacy y produce la misma salida).
 
 				## Contenido
 
 				| Ruta | Contenido |
 				|---|---|
 				| `src/main/java` | Código moderno (arquitectura hexagonal) |
-				| `src/test/java` | Pruebas unitarias JUnit 5 |
-				| `legacy/` | Programa original (con datos sensibles enmascarados) |
+				| `src/test/java` | Pruebas unitarias JUnit 5 y pasos de Cucumber |
+				| `src/test/resources/features` | Especificación ejecutable: escenarios Gherkin etiquetados por regla |
+				| `legacy/` | Programa original (con datos sensibles enmascarados) y, si aplica, su esquema |
 				| `docs/REGLAS_DE_NEGOCIO.md` | Catálogo de reglas aprobado, con escenarios Gherkin |
 				| `docs/TRAZABILIDAD.md` | Matriz regla → líneas legacy → código moderno |
 				| `docs/ARQUITECTURA.md`, `docs/adr/`, `docs/openapi.yaml` | Diseño, decisiones y contrato REST |
-				| `reports/` | Equivalencia, calidad, pruebas, cobertura, auditoría de IA y Golden Master |
+				| `reports/` | Equivalencia, calidad, seguridad, pruebas, cobertura, auditoría de IA y Golden Master |
 				| `INFORME_EJECUTIVO.md` | Resumen de una página para negocio |
 				""".formatted(job.getSourceName(), job.getDomainName(), job.getAcceptedRules().size(),
 				job.getSpecVersion(), job.getEquivalence().passed(), job.getEquivalence().total(),
-				job.getTestRun().succeeded(), job.getTestRun().testsFound(), job.getTestRun().lineCoverage(),
-				job.getTestRun().branchCoverage(), job.getQuality().blockers(), job.getQuality().criticals(),
+				job.getTestRun().succeeded(), job.getTestRun().testsFound(),
+				job.getBdd() == null ? "no ejecutados" : job.getBdd().passed() + "/" + job.getBdd().scenarios() + " aprobados",
+				job.getTestRun().lineCoverage(), job.getTestRun().branchCoverage(), job.getQuality().blockers(),
+				job.getQuality().criticals(),
+				job.getSecurity() == null || !job.getSecurity().executed() ? "no ejecutado"
+						: job.getSecurity().critical() + " (" + job.getSecurity().tool() + ")",
 				platform.sampleRunCommand(job), mainClass);
 	}
 
@@ -213,6 +249,27 @@ public class MigrationPackager {
 				sb.append('\n');
 			}
 			sb.append("```gherkin\n").append(r.getGherkin()).append("\n```\n\n");
+		}
+		if (!job.getDecisionTables().isEmpty()) {
+			sb.append("## Tablas de decisión\n\n");
+			for (DecisionTable table : job.getDecisionTables()) {
+				sb.append("### ").append(table.name()).append("\n\n");
+				if (table.ruleIds() != null && !table.ruleIds().isEmpty()) {
+					sb.append("Reglas: ").append(String.join(", ", table.ruleIds())).append("\n\n");
+				}
+				List<String> headers = new ArrayList<>();
+				table.conditions().forEach(c -> headers.add("¿" + c + "?"));
+				table.actions().forEach(a -> headers.add("→ " + a));
+				sb.append("| ").append(String.join(" | ", headers.stream().map(MigrationPackager::cell).toList())).append(" |\n");
+				sb.append("|").append("---|".repeat(headers.size())).append('\n');
+				for (DecisionTable.Row row : table.rows()) {
+					List<String> cells = new ArrayList<>();
+					cells.addAll(row.conditions() == null ? List.of() : row.conditions());
+					cells.addAll(row.actions() == null ? List.of() : row.actions());
+					sb.append("| ").append(String.join(" | ", cells.stream().map(MigrationPackager::cell).toList())).append(" |\n");
+				}
+				sb.append('\n');
+			}
 		}
 		sb.append("## Lógica de infraestructura (no es regla de negocio)\n\n");
 		job.getInfrastructureLogic().forEach(i -> sb.append("- ").append(i).append('\n'));
@@ -292,9 +349,76 @@ public class MigrationPackager {
 		return sb.toString();
 	}
 
-	private static String testsDoc(TestRunReport tests) {
+	private static String testsDoc(TestRunReport tests, BddReport bdd) {
+		String bddSection = bdd == null ? "\n## Escenarios BDD\n\nNo se ejecutaron.\n" : """
+
+				## Escenarios BDD (Gherkin ejecutable con Cucumber)
+
+				| Métrica | Valor |
+				|---|---|
+				| Escenarios | %d |
+				| Aprobados | %d |
+				| Fallidos | %d |
+				| Reglas cubiertas por escenarios etiquetados | %d (%s) |
+				| Reglas sin escenario | %s |
+
+				Los escenarios están en `src/test/resources/features`; cada uno lleva la etiqueta de la regla que
+				verifica (por ejemplo `@R-03`). Se ejecutan con `gradle test` mediante `RunCucumberTest`.
+
+				```
+				%s
+				```
+				""".formatted(bdd.scenarios(), bdd.passed(), bdd.failed(), bdd.coveredRules().size(),
+				String.join(", ", bdd.coveredRules()), bdd.uncoveredRules().isEmpty() ? "ninguna"
+						: String.join(", ", bdd.uncoveredRules()), bdd.output().strip());
+		return testsDocBase(tests) + bddSection;
+	}
+
+	private static String securityDoc(MigrationJob job) {
+		SecurityReport s = job.getSecurity();
+		StringBuilder sb = new StringBuilder("# Reporte de seguridad\n\n");
+		sb.append("## 1. Protección de datos antes de usar IA\n\n");
+		sb.append(job.getMaskingFindings().size())
+			.append(" datos sensibles (credenciales, cadenas de conexión, correos, IPs, tarjetas) se enmascararon antes ")
+			.append("de enviar el código a los modelos. Solo se usaron datos sintéticos.\n\n");
+		sb.append("## 2. Análisis estático de seguridad (SAST)\n\n");
+		if (s == null || !s.executed()) {
+			sb.append("No se ejecutó.\n\n");
+		}
+		else {
+			sb.append("Herramienta: **").append(s.tool()).append("**, sobre el bytecode compilado, dentro del sandbox ")
+				.append("sin red. Las vulnerabilidades de prioridad alta o media y los errores de corrección de prioridad ")
+				.append("alta son críticos y bloquean el quality gate.\n\n");
+			sb.append("| Severidad | Hallazgos |\n|---|---|\n");
+			sb.append("| Críticos | ").append(s.critical()).append(" |\n");
+			sb.append("| Mayores | ").append(s.major()).append(" |\n");
+			sb.append("| Menores | ").append(s.minor()).append(" |\n\n");
+			if (!s.findings().isEmpty()) {
+				sb.append("| Severidad | Regla | Archivo | Línea | Descripción |\n|---|---|---|---|---|\n");
+				s.findings()
+					.forEach(f -> sb.append("| ").append(f.severity()).append(" | ").append(cell(f.rule())).append(" | `")
+						.append(f.file()).append("` | ").append(f.line()).append(" | ").append(cell(f.message()))
+						.append(" |\n"));
+				sb.append('\n');
+			}
+		}
+		sb.append("## 3. Dependencias\n\n");
+		List<String> deps = s == null ? List.of() : s.productionDependencies();
+		sb.append(deps.isEmpty()
+				? "El código de producción no usa librerías de terceros: solo la biblioteca estándar de Java 21. No hay "
+						+ "dependencias de producción que puedan contener vulnerabilidades conocidas (CVE). Las pruebas usan "
+						+ "JUnit 5 y Cucumber, que no forman parte de la imagen final.\n\n"
+				: "Dependencias de terceros en producción (revisar contra bases de CVE): " + String.join(", ", deps) + "\n\n");
+		sb.append("## 4. Secretos en el código generado\n\n");
+		long secrets = job.getQuality() == null ? 0
+				: job.getQuality().findings().stream().filter(f -> f.rule().equals("secreto-en-codigo")).count();
+		sb.append(secrets == 0 ? "0 secretos detectados en el código generado.\n" : secrets + " posibles secretos detectados.\n");
+		return sb.toString();
+	}
+
+	private static String testsDocBase(TestRunReport tests) {
 		return """
-				# Reporte de pruebas unitarias
+				# Reporte de pruebas
 
 				| Métrica | Valor | Umbral |
 				|---|---|---|

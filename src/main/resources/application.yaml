@@ -16,7 +16,7 @@ spring:
 codephoenix:
   workspace: ./workspace
   sandbox:
-    image: codephoenix-sandbox:1
+    image: codephoenix-sandbox:2
     timeout: 5m
   # Oracle Database Free para ejecutar PL/SQL. Red interna: IP privada, sin salida a Internet.
   oracle:

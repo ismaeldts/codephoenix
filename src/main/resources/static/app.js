@@ -307,6 +307,8 @@ function tabSummary() {
     ${kpi('Pruebas unitarias', tr ? `${tr.succeeded}/${tr.testsFound}` : '—', tr ? 'exitosas (JUnit 5)' : 'pendiente', tr ? (tr.failed ? 'err' : 'ok') : '')}
     ${kpi('Cobertura', tr ? `${tr.lineCoverage}%` : '—', tr ? `líneas · ${tr.branchCoverage}% ramas` : 'umbral 80% / 70%', tr ? (tr.lineCoverage >= 80 && tr.branchCoverage >= 70 ? 'ok' : 'err') : '')}
     ${kpi('Hallazgos críticos', q ? `${q.blockers + q.criticals}` : '—', q ? `complejidad máx. ${q.maxMethodComplexity}` : 'pendiente', q ? (q.blockers + q.criticals ? 'err' : 'ok') : '')}
+    ${kpi('Escenarios BDD', j.bdd ? `${j.bdd.passed}/${j.bdd.scenarios}` : '—', j.bdd ? `Gherkin ejecutable · ${j.bdd.coveredRules.length} reglas cubiertas` : 'pendiente', j.bdd ? (j.bdd.failed || !j.bdd.scenarios ? 'err' : 'ok') : '')}
+    ${kpi('Vulnerabilidades (SAST)', j.security && j.security.executed ? `${j.security.critical}` : '—', j.security && j.security.executed ? `críticas · ${j.security.major} mayores` : 'pendiente', j.security && j.security.executed ? (j.security.critical ? 'err' : 'ok') : '')}
     ${kpi('Tiempo automatizado', formatDuration(automatedMs), 'sin contar la revisión humana')}
   </div>`;
 
@@ -429,6 +431,7 @@ function tabRules() {
       <div class="meta">${esc(r.category)} · líneas ${r.sourceStartLine}-${r.sourceEndLine} · confianza ${Math.round(r.confidence * 100)}%</div>
       <div class="confidence"><span class="${confClass(r.confidence)}" style="width:${Math.round(r.confidence * 100)}%"></span></div>
     </button>`).join('')}
+    ${j.decisionTables.length ? `<div class="panel" style="margin-top:8px"><h3>Tablas de decisión</h3>${j.decisionTables.map(decisionTable).join('')}</div>` : ''}
     ${j.infrastructureLogic.length ? `<div class="panel" style="margin-top:8px"><h3>Lógica de infraestructura (no es negocio)</h3><ul>${j.infrastructureLogic.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>` : ''}
     </div>
     <div class="rule-detail">
@@ -544,6 +547,23 @@ function tabVerification() {
       ${q.findings.map(f => `<tr><td><span class="chip ${f.severity === 'MENOR' ? '' : f.severity === 'MAYOR' ? 'warn' : 'err'}">${esc(f.severity)}</span></td><td>${esc(f.rule)}</td><td class="mono">${esc(f.file.split('/').pop())}</td><td>${f.line}</td><td>${esc(f.message)}</td></tr>`).join('')}</table>`
         : '<p>Sin hallazgos: precisión decimal, dependencias hexagonales, secretos, excepciones y complejidad dentro de los umbrales.</p>'}</div>`;
   }
+  if (j.bdd) {
+    html += `<div class="panel"><h3>Especificación ejecutable (Gherkin + Cucumber)</h3>
+      <p>${j.bdd.passed}/${j.bdd.scenarios} escenarios aprobados. Reglas cubiertas por escenarios etiquetados:
+        ${j.bdd.coveredRules.map(r => `<span class="chip ok">${esc(r)}</span>`).join(' ')}
+        ${j.bdd.uncoveredRules.map(r => `<span class="chip err">${esc(r)}</span>`).join(' ')}</p>
+      ${Object.entries(j.generatedFiles).filter(([p]) => p.endsWith('.feature')).map(([p, c]) => `<details><summary class="mono">${esc(p.split('/').pop())}</summary><div class="gherkin">${esc(c)}</div></details>`).join('')}
+    </div>`;
+  }
+  if (j.security) {
+    const s = j.security;
+    html += `<div class="panel"><h3>Seguridad: SAST <span class="chip">${esc(s.tool)}</span></h3>
+      ${s.executed ? `<p>${s.critical} críticos · ${s.major} mayores · ${s.minor} menores. Dependencias de producción: <b>${s.productionDependencies.length ? s.productionDependencies.map(esc).join(', ') : 'ninguna (solo JDK)'}</b></p>
+        ${s.findings.length ? `<table><tr><th>Severidad</th><th>Regla</th><th>Archivo</th><th>Línea</th><th>Descripción</th></tr>
+        ${s.findings.map(f => `<tr><td><span class="chip ${f.severity === 'MENOR' ? '' : f.severity === 'MAYOR' ? 'warn' : 'err'}">${esc(f.severity)}</span></td><td class="mono" style="font-size:12px">${esc(f.rule)}</td><td class="mono">${esc(f.file.split('/').pop())}</td><td>${f.line}</td><td>${esc(f.message)}</td></tr>`).join('')}</table>` : '<p>Sin hallazgos.</p>'}`
+        : `<pre class="out">${esc(s.output)}</pre>`}
+    </div>`;
+  }
   if (tr) html += `<div class="panel"><details><summary><b>Salida de JUnit</b></summary><pre class="out">${esc(tr.output)}</pre></details></div>`;
   return html;
 }
@@ -583,6 +603,13 @@ function tabGovernance() {
 }
 
 // ------------------------------------------------------------ helpers
+
+function decisionTable(t) {
+  const head = t.conditions.map(c => `<th>¿${esc(c)}?</th>`).join('') + t.actions.map(a => `<th>→ ${esc(a)}</th>`).join('');
+  const rows = t.rows.map(r => `<tr>${(r.conditions || []).map(v => `<td>${esc(v)}</td>`).join('')}${(r.actions || []).map(v => `<td><b>${esc(v)}</b></td>`).join('')}</tr>`).join('');
+  return `<p style="margin:10px 0 4px"><b>${esc(t.name)}</b> ${(t.ruleIds || []).map(r => `<span class="chip">${esc(r)}</span>`).join(' ')}</p>
+    <div style="overflow-x:auto"><table><tr>${head}</tr>${rows}</table></div>`;
+}
 
 function legacyOpts() {
   return { cobol: state.job.language === 'COBOL', plsql: state.job.language === 'PL/SQL' };

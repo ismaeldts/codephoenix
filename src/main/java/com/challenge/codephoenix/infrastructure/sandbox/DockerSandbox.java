@@ -52,10 +52,23 @@ public class DockerSandbox {
 
 	public Result run(Path workDir, String script) throws IOException, InterruptedException {
 		Path scriptFile = workDir.resolve(".sandbox-run.sh");
-		Files.writeString(scriptFile, script.replace("\r\n", "\n"), StandardCharsets.UTF_8);
-		List<String> command = List.of("docker", "run", "--rm", "--network", "none", "--memory", "1g", "--cpus",
-				"2", "--pids-limit", "512", "-v", workDir.toAbsolutePath() + ":/work", "-w", "/work",
-				properties.sandbox().image(), "bash", "/work/.sandbox-run.sh");
+		// umask 000: los archivos que crea el sandbox deben poder sobrescribirse en ejecuciones posteriores.
+		Files.writeString(scriptFile, "umask 000\n" + script.replace("\r\n", "\n"), StandardCharsets.UTF_8);
+		String mount;
+		String workingDir;
+		if (properties.sandbox().usesVolume()) {
+			String relative = properties.workspace().toAbsolutePath().relativize(workDir.toAbsolutePath()).toString();
+			mount = properties.sandbox().volume() + ":/vol";
+			workingDir = "/vol/" + relative.replace('\\', '/');
+		}
+		else {
+			mount = workDir.toAbsolutePath() + ":/work";
+			workingDir = "/work";
+		}
+		// --hostname localhost: sin red, algunas herramientas (SpotBugs/log4j) no resuelven un hostname aleatorio.
+		List<String> command = List.of("docker", "run", "--rm", "--network", "none", "--hostname", "localhost",
+				"--memory", "1g", "--cpus", "2", "--pids-limit", "512", "-v", mount, "-w", workingDir,
+				properties.sandbox().image(), "bash", ".sandbox-run.sh");
 		Path log = Files.createTempFile("sandbox", ".log");
 		try {
 			Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();

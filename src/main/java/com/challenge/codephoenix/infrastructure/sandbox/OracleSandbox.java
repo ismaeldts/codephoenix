@@ -43,11 +43,22 @@ public class OracleSandbox {
 
 	private final CodephoenixProperties.Oracle config;
 	private final Path jobsRoot;
+	/** Montaje del workspace en el contenedor: los trabajos quedan siempre en /work/jobs. */
+	private final String mount;
+	private final String mountLabel;
 	private volatile boolean starting;
 
 	public OracleSandbox(CodephoenixProperties properties) {
 		this.config = properties.oracle();
 		this.jobsRoot = properties.workspace().resolve("jobs").toAbsolutePath();
+		if (properties.sandbox().usesVolume()) {
+			this.mount = properties.sandbox().volume() + ":/work";
+			this.mountLabel = "volume:" + properties.sandbox().volume();
+		}
+		else {
+			this.mount = jobsRoot + ":/work/jobs";
+			this.mountLabel = jobsRoot.toString();
+		}
 	}
 
 	/** Arranca la base de datos en segundo plano al iniciar la aplicación, para que esté lista cuando se necesite. */
@@ -87,30 +98,40 @@ public class OracleSandbox {
 			// Sin comillas dentro de la plantilla: en Windows ProcessBuilder no las escapa bien.
 			String labels = inspect("{{json .Config.Labels}}");
 			boolean exists = labels != null;
-			String expected = "\"" + LABEL + "\":\"" + jobsRoot.toString().replace("\\", "\\\\") + "\"";
+			String expected = "\"" + LABEL + "\":\"" + mountLabel.replace("\\", "\\\\") + "\"";
 			if (exists && !labels.contains(expected)) {
 				log.info("El contenedor {} monta otro workspace; se recrea", config.container());
 				docker(List.of("rm", "-f", config.container()), Duration.ofMinutes(1));
 				exists = false;
 			}
 			if (!exists) {
-				Files.createDirectories(jobsRoot);
-				docker(List.of("network", "create", "--internal", config.network()), Duration.ofMinutes(1));
-				Result run = docker(List.of("run", "-d", "--name", config.container(), "--network", config.network(),
-						"--memory", "2g", "--label", LABEL + "=" + jobsRoot, "-e", "ORACLE_PASSWORD=" + randomSecret(),
-						"-v", jobsRoot + ":/work/jobs", config.image()), Duration.ofMinutes(2));
-				if (!run.succeeded()) {
-					throw new IllegalStateException("No se pudo crear el contenedor Oracle: " + run.output());
-				}
+				createContainer();
 			}
 			else if (!"true".equals(inspect("{{.State.Running}}"))) {
 				docker(List.of("start", config.container()), Duration.ofMinutes(1));
 			}
-			waitUntilAcceptingConnections();
+			try {
+				waitUntilAcceptingConnections();
+			}
+			catch (ContainerStoppedException ex) {
+				// Un arranque puede fallar por contención de recursos (por ejemplo ORA-04021): se recrea una vez.
+				log.warn("El contenedor Oracle se detuvo al arrancar; se recrea. {}", ex.getMessage());
+				docker(List.of("rm", "-f", config.container()), Duration.ofMinutes(1));
+				createContainer();
+				waitUntilAcceptingConnections();
+			}
 		}
 		finally {
 			starting = false;
 		}
+	}
+
+	private static final class ContainerStoppedException extends IllegalStateException {
+
+		ContainerStoppedException(String message) {
+			super(message);
+		}
+
 	}
 
 	/** Ejecuta un script bash dentro del contenedor (la variable ORACLE_PASSWORD está disponible). */
@@ -118,9 +139,20 @@ public class OracleSandbox {
 		ensureReady();
 		Path file = jobDir.resolve("plsql").resolve("run.sh");
 		Files.createDirectories(file.getParent());
-		Files.writeString(file, script.replace("\r\n", "\n"), StandardCharsets.UTF_8);
+		Files.writeString(file, "umask 000\n" + script.replace("\r\n", "\n"), StandardCharsets.UTF_8);
 		String inContainer = "/work/jobs/" + jobsRoot.relativize(file.toAbsolutePath()).toString().replace('\\', '/');
 		return docker(List.of("exec", config.container(), "bash", inContainer), config.timeout());
+	}
+
+	private void createContainer() throws IOException, InterruptedException {
+		Files.createDirectories(jobsRoot);
+		docker(List.of("network", "create", "--internal", config.network()), Duration.ofMinutes(1));
+		Result run = docker(List.of("run", "-d", "--name", config.container(), "--network", config.network(),
+				"--memory", "2g", "--label", LABEL + "=" + mountLabel, "-e", "ORACLE_PASSWORD=" + randomSecret(), "-v",
+				mount, config.image()), Duration.ofMinutes(2));
+		if (!run.succeeded()) {
+			throw new IllegalStateException("No se pudo crear el contenedor Oracle: " + run.output());
+		}
 	}
 
 	private void waitUntilAcceptingConnections() throws IOException, InterruptedException {
@@ -134,7 +166,7 @@ public class OracleSandbox {
 			}
 			if (!"true".equals(inspect("{{.State.Running}}"))) {
 				Result logs = docker(List.of("logs", "--tail", "20", config.container()), Duration.ofSeconds(30));
-				throw new IllegalStateException("El contenedor Oracle se detuvo al arrancar:\n" + logs.output());
+				throw new ContainerStoppedException("El contenedor Oracle se detuvo al arrancar:\n" + logs.output());
 			}
 			Thread.sleep(2000);
 		}

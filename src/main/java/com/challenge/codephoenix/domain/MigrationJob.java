@@ -51,6 +51,9 @@ public class MigrationJob {
 	private EquivalenceReport equivalence;
 	private TestRunReport testRun;
 	private QualityReport quality;
+	private SecurityReport security;
+	private BddReport bdd;
+	private List<DecisionTable> decisionTables = List.of();
 	private String executiveSummary;
 	private Path packageFile;
 	private String error;
@@ -79,7 +82,8 @@ public class MigrationJob {
 				inferredTables, inferredDdl,
 				rulesSummary, infrastructureLogic, rules.stream().map(BusinessRule::snapshot).toList(), specVersion,
 				architecture, testCases, new LinkedHashMap<>(generatedFiles), generationAttempts, equivalence, testRun,
-				quality, executiveSummary, packageFile == null ? null : packageFile.toString(), error,
+				quality, security, bdd, decisionTables, executiveSummary,
+				packageFile == null ? null : packageFile.toString(), error,
 				phases.values().stream().map(PhaseState::snapshot).toList(), List.copyOf(events), List.copyOf(audit));
 	}
 
@@ -111,6 +115,9 @@ public class MigrationJob {
 		job.equivalence = s.equivalence();
 		job.testRun = s.testRun();
 		job.quality = s.quality();
+		job.security = s.security();
+		job.bdd = s.bdd();
+		job.decisionTables = orEmpty(s.decisionTables());
 		job.executiveSummary = s.executiveSummary();
 		job.packageFile = s.packageFile() == null ? null : Path.of(s.packageFile());
 		job.error = s.error();
@@ -177,6 +184,18 @@ public class MigrationJob {
 		this.rules.addAll(extracted);
 		this.infrastructureLogic = List.copyOf(infra);
 		this.status = Status.ESPERANDO_APROBACION;
+	}
+
+	public synchronized void decisionTablesExtracted(List<DecisionTable> tables) {
+		this.decisionTables = List.copyOf(tables);
+	}
+
+	public synchronized void secured(SecurityReport security) {
+		this.security = security;
+	}
+
+	public synchronized void bddVerified(BddReport bdd) {
+		this.bdd = bdd;
 	}
 
 	public synchronized Optional<BusinessRule> rule(String ruleId) {
@@ -350,6 +369,18 @@ public class MigrationJob {
 
 	public synchronized QualityReport getQuality() {
 		return quality;
+	}
+
+	public synchronized SecurityReport getSecurity() {
+		return security;
+	}
+
+	public synchronized BddReport getBdd() {
+		return bdd;
+	}
+
+	public synchronized List<DecisionTable> getDecisionTables() {
+		return decisionTables;
 	}
 
 	public synchronized String getExecutiveSummary() {

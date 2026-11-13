@@ -187,16 +187,80 @@ public class ExecutionService {
 	}
 
 	/** Ejecuta la suite JUnit 5 generada con el agente de JaCoCo para medir la cobertura. */
+	/** Resultado crudo de un análisis o ejecución que luego se interpreta. */
+	public record ToolRun(boolean ok, String output, String report) {
+	}
+
+	/** SAST sobre el bytecode compilado del código generado (SpotBugs + FindSecBugs). */
+	public ToolRun runSecurityScan(Path jobDir) throws IOException, InterruptedException {
+		String script = """
+				set -u
+				mkdir -p reports
+				[ -d build/classes ] || { echo NO_CLASSES; exit 50; }
+				java -jar /opt/spotbugs/lib/spotbugs.jar -textui -quiet -effort:max -low \\
+				  -pluginList /opt/tools/findsecbugs-plugin.jar -xml:withMessages -output reports/spotbugs.xml \\
+				  build/classes > reports/spotbugs.log 2>&1
+				cat reports/spotbugs.log
+				echo SAST_DONE
+				""";
+		DockerSandbox.Result result = sandbox.run(jobDir, script);
+		Path xml = jobDir.resolve("reports/spotbugs.xml");
+		boolean ok = result.succeeded() && result.output().contains("SAST_DONE") && Files.exists(xml);
+		return new ToolRun(ok, result.output(), ok ? Files.readString(xml, StandardCharsets.UTF_8) : "");
+	}
+
+	/** Ejecuta los escenarios Gherkin con Cucumber (las pruebas ya están compiladas por runUnitTests). */
+	public TestRunReport runBdd(Path jobDir, String gluePackage) throws IOException, InterruptedException {
+		String script = """
+				set -u
+				CUKE=$(ls /opt/cucumber/*.jar | tr '\\n' ':')
+				[ -d build/test-classes/features ] || { echo NO_FEATURES; exit 60; }
+				java -jar /opt/tools/junit-console.jar execute --disable-banner --details=tree \\
+				  --include-engine cucumber --select-directory build/test-classes/features \\
+				  --config cucumber.glue=%s --config cucumber.publish.quiet=true \\
+				  --class-path "build/test-classes:build/classes:$CUKE" > reports/bdd.log 2>&1
+				cat reports/bdd.log
+				echo BDD_DONE
+				""".formatted(gluePackage);
+		DockerSandbox.Result result = sandbox.run(jobDir, script);
+		String output = result.output();
+		if (!output.contains("BDD_DONE")) {
+			return new TestRunReport(false, 0, 0, 0, 0, 0, output);
+		}
+		int[] counts = summary(output);
+		return new TestRunReport(true, counts[0], counts[1], counts[2], 0, 0, output);
+	}
+
+	/** Lee el resumen del lanzador de JUnit: {encontradas, exitosas, fallidas}. */
+	private static int[] summary(String output) {
+		int found = 0;
+		int succeeded = 0;
+		int failed = 0;
+		Matcher m = JUNIT_SUMMARY.matcher(output);
+		while (m.find()) {
+			int value = Integer.parseInt(m.group(1));
+			switch (m.group(2)) {
+				case "found" -> found = value;
+				case "successful" -> succeeded = value;
+				default -> failed = value;
+			}
+		}
+		return new int[] { found, succeeded, failed };
+	}
+
 	public TestRunReport runUnitTests(Path jobDir) throws IOException, InterruptedException {
 		String script = """
 				set -u
 				rm -rf build/test-classes reports/junit reports/coverage-html && mkdir -p build/test-classes reports
+				CUKE=$(ls /opt/cucumber/*.jar | tr '\\n' ':')
 				find generated/src/test/java -name '*.java' > /tmp/tests.txt
-				javac -encoding UTF-8 -cp build/classes:/opt/tools/junit-console.jar -d build/test-classes @/tmp/tests.txt \\
+				javac -encoding UTF-8 -cp "build/classes:/opt/tools/junit-console.jar:$CUKE" -d build/test-classes @/tmp/tests.txt \\
 				  > reports/javac-tests.log 2>&1 || { echo TEST_COMPILE_FAILED; cat reports/javac-tests.log; exit 30; }
+				if [ -d generated/src/test/resources ]; then cp -r generated/src/test/resources/. build/test-classes/; fi
 				java -javaagent:/opt/tools/jacocoagent.jar=destfile=reports/jacoco.exec \\
 				  -jar /opt/tools/junit-console.jar execute --disable-banner --details=summary \\
-				  --class-path build/test-classes:build/classes --scan-class-path \\
+				  --exclude-engine cucumber --exclude-engine junit-platform-suite \\
+				  --class-path "build/test-classes:build/classes:$CUKE" --scan-class-path \\
 				  --reports-dir reports/junit > reports/junit.log 2>&1
 				cat reports/junit.log
 				java -jar /opt/tools/jacococli.jar report reports/jacoco.exec --classfiles build/classes \\
